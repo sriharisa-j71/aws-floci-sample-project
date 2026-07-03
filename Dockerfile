@@ -1,69 +1,37 @@
-FROM public.ecr.aws/glue/aws-glue-libs:5 AS full
+FROM amazoncorretto:17-alpine
 
-FROM amazonlinux:2023 AS tools
+ARG SPARK_VERSION=3.5.4
+ARG HADOOP_SHORT=3
 
-RUN dnf install -y \
-    java-17-amazon-corretto-devel \
-    shadow-utils procps \
-    postgresql15 \
-    unzip && \
-    dnf clean all
+RUN apk add --no-cache bash wget ca-certificates
 
-# AWS CLI v2 (standalone binary, no Python needed)
-RUN curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip && \
-    unzip -q /tmp/awscliv2.zip -d /tmp && \
-    /tmp/aws/install && \
-    rm -rf /tmp/aws*
+RUN wget -qO- "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_SHORT}.tgz" \
+    | tar xz -C /opt && \
+    ln -s "/opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_SHORT}" /opt/spark
 
-FROM tools
+ARG HADOOP_AWS_VERSION=3.3.4
+ARG AWS_SDK_BUNDLE_VERSION=1.12.262
+RUN wget -q "https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_AWS_VERSION}/hadoop-aws-${HADOOP_AWS_VERSION}.jar" \
+    -O "/opt/spark/jars/hadoop-aws-${HADOOP_AWS_VERSION}.jar" && \
+    wget -q "https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/${AWS_SDK_BUNDLE_VERSION}/aws-java-sdk-bundle-${AWS_SDK_BUNDLE_VERSION}.jar" \
+    -O "/opt/spark/jars/aws-java-sdk-bundle-${AWS_SDK_BUNDLE_VERSION}.jar"
 
-COPY --from=full /usr/lib/spark/jars      /usr/lib/spark/jars
-COPY --from=full /usr/lib/spark/bin       /usr/lib/spark/bin
-COPY --from=full /usr/lib/spark/sbin      /usr/lib/spark/sbin
-COPY --from=full /usr/lib/spark/conf      /usr/lib/spark/conf
+RUN rm -rf /opt/spark/examples /opt/spark/data && \
+    rm -f "$JAVA_HOME"/bin/javac "$JAVA_HOME"/bin/javadoc "$JAVA_HOME"/bin/javap \
+      "$JAVA_HOME"/bin/jcmd "$JAVA_HOME"/bin/jconsole "$JAVA_HOME"/bin/jdb \
+      "$JAVA_HOME"/bin/jdeprscan "$JAVA_HOME"/bin/jdeps "$JAVA_HOME"/bin/jfr \
+      "$JAVA_HOME"/bin/jfrconv "$JAVA_HOME"/bin/jhsdb "$JAVA_HOME"/bin/jimage \
+      "$JAVA_HOME"/bin/jinfo "$JAVA_HOME"/bin/jlink "$JAVA_HOME"/bin/jmap \
+      "$JAVA_HOME"/bin/jmod "$JAVA_HOME"/bin/jpackage "$JAVA_HOME"/bin/jps \
+      "$JAVA_HOME"/bin/jrunscript "$JAVA_HOME"/bin/jshell "$JAVA_HOME"/bin/jstack \
+      "$JAVA_HOME"/bin/jstat "$JAVA_HOME"/bin/jstatd "$JAVA_HOME"/bin/serialver \
+      "$JAVA_HOME"/bin/jarsigner "$JAVA_HOME"/bin/asprof && \
+    rm -rf "$JAVA_HOME"/jmods "$JAVA_HOME"/lib/src.zip
 
-COPY --from=full /usr/share/aws/glue-pds/jars /usr/share/aws/glue-pds/jars
-COPY --from=full /usr/share/aws/aws-java-sdk-v2 /usr/share/aws/aws-java-sdk-v2
-COPY --from=full /usr/share/aws/glue-streaming /usr/share/aws/glue-streaming
+ENV JAVA_HOME=/usr/lib/jvm/default-jvm \
+    SPARK_HOME=/opt/spark \
+    PATH=/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-RUN rm -rf \
-    /usr/share/aws/glue-pds/jars/snowflake-jdbc-*.jar \
-    /usr/share/aws/glue-pds/jars/delta-*.jar \
-    /usr/share/aws/glue-pds/jars/mssql-jdbc-*.jar \
-    /usr/share/aws/glue-pds/jars/mysql-connector-*.jar \
-    /usr/share/aws/glue-pds/jars/mongodb-*.jar \
-    /usr/share/aws/glue-pds/jars/bson-*.jar \
-    /usr/share/aws/glue-pds/jars/junit-*.jar \
-    /usr/share/aws/glue-pds/jars/mockito-*.jar \
-    /usr/share/aws/glue-pds/jars/powermock-*.jar \
-    /usr/share/aws/glue-pds/jars/testng-*.jar \
-    /usr/share/aws/glue-pds/jars/hamcrest-*.jar \
-    /usr/share/aws/glue-pds/jars/lombok-*.jar \
-    /usr/share/aws/glue-pds/jars/jquery-*.jar \
-    /usr/share/aws/glue-pds/jars/cloudformation-*.jar \
-    # /usr/share/aws/glue-pds/jars/cloudwatch-*.jar \  # kept — needed for Glue continuous logging on real AWS
-    /usr/share/aws/glue-pds/jars/lakeformation-*.jar \
-    /usr/share/aws/glue-pds/jars/kinesis-*.jar \
-    /usr/share/aws/glue-pds/jars/dynamodb-*.jar \
-    /usr/share/aws/glue-pds/jars/redshift-*.jar \
-    /usr/share/aws/glue-pds/jars/secretsmanager-*.jar \
-    /usr/share/aws/glue-pds/jars/iam-*.jar \
-    /usr/share/aws/glue-pds/jars/emr-dynamodb-*.jar \
-    /usr/share/aws/glue-pds/jars/msgpack-*.jar \
-    /usr/share/aws/glue-pds/jars/argon2-*.jar \
-    /usr/lib/spark/data
-
-# hadoop-aws + AWS SDK v2 bundle needed on Spark's classpath for S3A
-RUN cp /usr/share/aws/glue-pds/jars/hadoop-aws-*.jar /usr/lib/spark/jars/ && \
-    cp /usr/share/aws/aws-java-sdk-v2/aws-sdk-java-bundle-*.jar /usr/lib/spark/jars/
-
-ENV JAVA_HOME=/usr/lib/jvm/jre-17 \
-    SPARK_HOME=/usr/lib/spark \
-    SPARK_CONF_DIR=/etc/spark/conf \
-    LANG=C.UTF-8
-
-ENV PATH=/usr/lib/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-RUN useradd -m hadoop
+RUN adduser -D hadoop
 USER hadoop
 WORKDIR /home/hadoop
