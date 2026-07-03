@@ -1,0 +1,31 @@
+# Build outputs
+**/target/
+**/out/
+dependency-reduced-pom.xml
+glue-deploy
+glue-deploy.zip
+glue-job/.bsp/
+glue-job/scripts/
+glue-job/project/build.properties
+
+# Floci data
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# Session / notes
+SESSION.md
+
+# OpenTofu state
+infra/.terraform*
+infra/terraform.tfstate*

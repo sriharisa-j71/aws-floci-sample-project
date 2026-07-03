@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/employee/.*"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "exists": false,
+      "emp_id": null,
+      "emp_name": null,
+      "department": null
+    }
+  },
+  "priority": 10
+}

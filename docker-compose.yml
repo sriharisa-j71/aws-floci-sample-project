@@ -1,0 +1,154 @@
+services:
+  wiremock:
+    container_name: wiremock
+    image: wiremock/wiremock:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./wiremock/mappings:/home/wiremock/mappings
+    command: ["--global-response-templating", "--verbose"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/__admin/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  floci:
+    container_name: floci
+    image: floci/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+    environment:
+      FLOCI_SERVICES_DOCKER_NETWORK: aws-gluejob-floci_default
+      FLOCI_STORAGE_MODE: memory
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  postgres:
+    container_name: postgres
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret123
+      POSTGRES_DB: postgres
+    volumes:
+      - ./glue-job/sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  infra-setup:
+    container_name: infra-setup
+    image: amazon/aws-cli:latest
+    depends_on:
+      floci:
+        condition: service_healthy
+    environment:
+      AWS_ENDPOINT_URL: http://floci:4566
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - ./lambda-employee-file-handler/target/employee-file-handler-1.0.jar:/tmp/employee-file-handler.jar
+      - ./lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar:/tmp/employee-sal-processor.jar
+    entrypoint: ["/bin/sh", "-c"]
+    command: [
+      "
+        echo '=== Creating SSM params ===' &&
+        aws ssm put-parameter --name /emp/api/endpoint --value http://wiremock:8080 --type String --overwrite &&
+        aws ssm put-parameter --name /emp/api/employee-check-enabled --value true --type String --overwrite &&
+        echo '=== Creating SQS queue ===' &&
+        aws sqs create-queue --queue-name emp-processing &&
+        SQS_URL=$$(aws sqs get-queue-url --queue-name emp-processing --query QueueUrl --output text) &&
+        aws ssm put-parameter --name /emp/sqs/queue-url --value \"$$SQS_URL\" --type String --overwrite &&
+        echo '=== Creating S3 buckets ===' &&
+        aws s3 mb s3://glue-artifacts --region us-east-1 \
+          2>/dev/null || true &&
+        aws s3 mb s3://emp-output --region us-east-1 \
+          2>/dev/null || true &&
+        echo '=== Uploading Lambda JARs to S3 ===' &&
+        aws s3 cp /tmp/employee-file-handler.jar s3://glue-artifacts/lambdas/employee-file-handler-1.0.jar &&
+        aws s3 cp /tmp/employee-sal-processor.jar s3://glue-artifacts/lambdas/employee-sal-processor-1.0.jar &&
+        echo '=== Creating Lambda: employee-file-handler ===' &&
+        aws lambda create-function \
+          --function-name employee-file-handler \
+          --runtime java17 \
+          --role arn:aws:iam::000000000000:role/lambda-exec-role \
+          --handler com.example.S3ToSqsLambda::handleRequest \
+          --code S3Bucket=glue-artifacts,S3Key=lambdas/employee-file-handler-1.0.jar \
+          --timeout 60 \
+          --memory-size 512 \
+          --environment Variables=\"{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}\" \
+          2>/dev/null || \
+        aws lambda update-function-code \
+          --function-name employee-file-handler \
+          --s3-bucket glue-artifacts --s3-key lambdas/employee-file-handler-1.0.jar &&
+        echo '=== Creating Lambda: employee-sal-processor ===' &&
+        aws lambda create-function \
+          --function-name employee-sal-processor \
+          --runtime java17 \
+          --role arn:aws:iam::000000000000:role/lambda-exec-role \
+          --handler com.example.SqsProcessorLambda::handleRequest \
+          --code S3Bucket=glue-artifacts,S3Key=lambdas/employee-sal-processor-1.0.jar \
+          --timeout 60 \
+          --memory-size 512 \
+          --environment Variables=\"{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}\" \
+          2>/dev/null || \
+        aws lambda update-function-code \
+          --function-name employee-sal-processor \
+          --s3-bucket glue-artifacts --s3-key lambdas/employee-sal-processor-1.0.jar &&
+        echo '=== Setting up S3 notification (emp-output → employee-file-handler) ===' &&
+        aws s3api put-bucket-notification-configuration \
+          --bucket emp-output \
+          --notification-configuration '{\"LambdaFunctionConfigurations\":[{\"LambdaFunctionArn\":\"arn:aws:lambda:us-east-1:000000000000:function:employee-file-handler\",\"Events\":[\"s3:ObjectCreated:*\"],\"Filter\":{\"Key\":{\"FilterRules\":[{\"Name\":\"suffix\",\"Value\":\".csv\"}]}}}]}' &&
+        echo '=== Setting up SQS event mapping (emp-processing → employee-sal-processor) ===' &&
+        aws lambda create-event-source-mapping \
+          --function-name employee-sal-processor \
+          --event-source-arn arn:aws:sqs:us-east-1:000000000000:emp-processing \
+          --batch-size 10 \
+          2>/dev/null || true &&
+        echo '=== Infra setup complete ==='
+      "
+    ]
+
+  glue-runner:
+    container_name: glue-runner
+    image: glue-scala-minimal:latest
+    stdin_open: true
+    tty: true
+    depends_on:
+      wiremock:
+        condition: service_healthy
+      infra-setup:
+        condition: service_completed_successfully
+      floci:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      AWS_ENDPOINT_URL: http://floci:4566
+      WIREMOCK_ENDPOINT: http://wiremock:8080
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - ./glue-job/target/out/jvm/scala-2.12.18/glue5-spark-job/glue5-spark-job-assembly-1.0.jar:/opt/job.jar
+      - ./scripts/glue-runner.sh:/opt/glue-runner.sh
+    entrypoint: ["/bin/bash"]
+    command: ["-c", "echo 'glue-runner ready. Submit jobs with: docker exec glue-runner bash /opt/glue-runner.sh' && sleep infinity"]

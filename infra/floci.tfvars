@@ -1,0 +1,7 @@
+artifacts_bucket    = "emp-glue-artifacts"
+output_bucket       = "emp-glue-output"
+rds_jdbc_url        = "jdbc:postgresql://postgres:5432/postgres"
+rds_jdbc_user       = "admin"
+rds_jdbc_password   = "secret123"
+glue_trigger_mode   = "docker"
+aws_endpoint_url    = "http://localhost:4566"
