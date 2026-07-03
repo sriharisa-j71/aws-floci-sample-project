@@ -75,3 +75,21 @@ variable "glue_trigger_mode" {
   type        = string
   default     = "docker"
 }
+
+variable "log_retention_days" {
+  description = "CloudWatch Log Group retention in days"
+  type        = number
+  default     = 30
+}
+
+variable "log_export_bucket" {
+  description = "S3 bucket name for CloudWatch log archive"
+  type        = string
+  default     = "emp-glue-log-archive"
+}
+
+variable "log_export_retention_days" {
+  description = "S3 lifecycle expiration for log export bucket"
+  type        = number
+  default     = 90
+}

@@ -1,6 +1,7 @@
 package com.example
 
 import org.apache.spark.sql.SparkSession
+import org.slf4j.LoggerFactory
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.ssm.SsmClient
@@ -10,6 +11,8 @@ import java.net.{HttpURLConnection, URI}
 import scala.io.Source
 
 object EmpToS3Core {
+  private val log = LoggerFactory.getLogger(getClass)
+
   def run(spark: SparkSession, jdbcUrl: String, jdbcUser: String, jdbcPassword: String, jdbcQuery: String, outputPath: String, apiEndpoint: String = ""): Unit = {
     val df = spark.read.format("jdbc")
       .option("url", jdbcUrl)
@@ -24,7 +27,7 @@ object EmpToS3Core {
 
     if (effectiveApiEndpoint.nonEmpty) {
       import df.sparkSession.implicits._
-      println(s"=== Checking employees via API: $effectiveApiEndpoint ===")
+      log.info("Checking employees via API: {}", effectiveApiEndpoint)
       df.foreach { row =>
         val empId = row.getAs[java.lang.Integer]("emp_id")
         val name  = row.getAs[String]("emp_name")
@@ -35,14 +38,14 @@ object EmpToS3Core {
           conn.setConnectTimeout(5000)
           conn.setReadTimeout(5000)
           val response = Source.fromInputStream(conn.getInputStream).mkString
-          println(s"  Employee $empId ($name): $response")
+          log.info("Employee {} ({}): {}", empId, name, response)
           conn.disconnect()
         } catch {
-          case e: Exception => println(s"  Employee $empId ($name): API call failed - ${e.getMessage}")
+          case e: Exception => log.warn("Employee {} ({}): API call failed - {}", empId, name, e.getMessage)
         }
       }
     } else {
-      println("=== No API endpoint configured, skipping employee check ===")
+      log.info("No API endpoint configured, skipping employee check")
     }
 
     df.write
@@ -66,14 +69,14 @@ object EmpToS3Core {
       try {
         val req = GetParameterRequest.builder().name("/emp/api/endpoint").build()
         val value = ssm.getParameter(req).parameter().value()
-        println(s"Resolved API endpoint from SSM: $value")
+        log.info("Resolved API endpoint from SSM: {}", value)
         value
       } finally {
         ssm.close()
       }
     } catch {
       case e: Exception =>
-        println(s"Failed to read SSM parameter /emp/api/endpoint: ${e.getMessage}")
+        log.error("Failed to read SSM parameter /emp/api/endpoint: {}", e.getMessage)
         ""
     }
   }

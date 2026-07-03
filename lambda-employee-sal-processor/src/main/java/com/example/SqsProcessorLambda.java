@@ -4,6 +4,8 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -20,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 
 public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
+
+    private static final Logger log = LoggerFactory.getLogger(SqsProcessorLambda.class);
 
     private static final String AWS_ENDPOINT = System.getenv().getOrDefault("AWS_ENDPOINT_URL",
             "http://floci:4566");
@@ -57,24 +61,23 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
             var req = GetParameterRequest.builder().name(paramPath).build();
             return ssm.getParameter(req).parameter().value();
         } catch (Exception e) {
-            System.err.println("SSM read failed for " + paramPath + ": " + e.getMessage());
+            log.error("SSM read failed for {}: {}", paramPath, e.getMessage());
             return null;
         }
     }
 
     @Override
     public String handleRequest(SQSEvent event, Context context) {
-        context.getLogger().log("API endpoint from SSM: " + apiEndpoint + "\n");
+        log.info("API endpoint from SSM: {}", apiEndpoint);
         int processed = 0;
 
         for (SQSEvent.SQSMessage msg : event.getRecords()) {
             try {
                 EmployeeRecord emp = mapper.readValue(msg.getBody(), EmployeeRecord.class);
-                context.getLogger().log("Processing emp_id=" + emp.emp_id() + "\n");
+                log.info("Processing emp_id={}", emp.emp_id());
 
                 boolean exists = checkEmployeeExists(emp.emp_id(), emp.emp_name());
-                context.getLogger().log("  Employee " + emp.emp_id() + " (" + emp.emp_name()
-                        + ") exists=" + exists + "\n");
+                log.info("Employee {} ({}) exists={}", emp.emp_id(), emp.emp_name(), exists);
 
                 if (sqsQueueUrl != null && msg.getReceiptHandle() != null) {
                     sqs.deleteMessage(DeleteMessageRequest.builder()
@@ -84,18 +87,18 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
                 }
                 processed++;
             } catch (Exception e) {
-                context.getLogger().log("Error processing message: " + e.getMessage() + "\n");
+                log.error("Error processing message: {}", e.getMessage());
             }
         }
 
         String result = "Processed " + processed + " messages";
-        context.getLogger().log(result + "\n");
+        log.info(result);
         return result;
     }
 
     private boolean checkEmployeeExists(int empId, String empName) {
         if (apiEndpoint == null || apiEndpoint.isEmpty()) {
-            System.out.println("  No API endpoint configured, skipping check");
+            log.info("No API endpoint configured, skipping check");
             return true;
         }
         try {
@@ -110,13 +113,13 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
                 try (var reader = new BufferedReader(
                         new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                     String response = reader.lines().collect(Collectors.joining());
-                    System.out.println("  API response for emp " + empId + ": " + response);
+                    log.info("API response for emp {}: {}", empId, response);
                     return response.contains("\"exists\": true") || response.contains("\"exists\":true");
                 }
             }
             return false;
         } catch (Exception e) {
-            System.out.println("  API call failed for emp " + empId + ": " + e.getMessage());
+            log.info("API call failed for emp {}: {}", empId, e.getMessage());
             return false;
         }
     }
@@ -143,8 +146,8 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
         String queueUrl = System.getenv().getOrDefault("SQS_QUEUE_URL",
                 "http://localhost:4566/000000000000/emp-processing");
 
-        System.out.println("Polling SQS queue: " + queueUrl);
-        System.out.println("API endpoint from SSM: " + apiEndpoint);
+        log.info("Polling SQS queue: {}", queueUrl);
+        log.info("API endpoint from SSM: {}", apiEndpoint);
 
         var receiveReq = software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest.builder()
                 .queueUrl(queueUrl)
@@ -155,13 +158,13 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
         while (true) {
             var response = sqs.receiveMessage(receiveReq);
             if (response.messages().isEmpty()) {
-                System.out.println("No messages, waiting...");
+                log.info("No messages, waiting...");
                 continue;
             }
             for (var msg : response.messages()) {
                 try {
                     EmployeeRecord emp = mapper.readValue(msg.body(), EmployeeRecord.class);
-                    System.out.println("Processing: emp_id=" + emp.emp_id() + ", name=" + emp.emp_name());
+                    log.info("Processing: emp_id={}, name={}", emp.emp_id(), emp.emp_name());
 
                     URL url = URI.create(apiEndpoint + "/employee/" + emp.emp_id()).toURL();
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -172,15 +175,15 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, String> {
                     try (var reader = new BufferedReader(
                             new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                         String apiResp = reader.lines().collect(Collectors.joining());
-                        System.out.println("  API: " + apiResp);
+                        log.info("API: {}", apiResp);
                     }
 
                     sqs.deleteMessage(
                             software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
                                     .queueUrl(queueUrl).receiptHandle(msg.receiptHandle()).build());
-                    System.out.println("  Done.");
+                    log.info("Done.");
                 } catch (Exception e) {
-                    System.err.println("Error: " + e.getMessage());
+                    log.error("Error: {}", e.getMessage());
                 }
             }
         }

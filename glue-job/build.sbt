@@ -35,15 +35,19 @@ lazy val root = (project in file("."))
 
       "org.postgresql"       %  "postgresql"           % "42.5.4",
 
+      "org.slf4j"            %  "slf4j-api"            % "2.0.16",
+      "ch.qos.logback"       %  "logback-classic"      % "1.5.16",
+      "net.logstash.logback" %  "logstash-logback-encoder" % "8.0",
+
       "org.scalatest"        %% "scalatest"            % "3.2.15" % Test,
-    ),
+    ).map(_.exclude("org.apache.logging.log4j", "log4j-slf4j-impl")),
 
     Test / libraryDependencies ++= Seq(
       "org.apache.spark"     %% "spark-sql"            % sparkVersion,
       "org.apache.hadoop"    %  "hadoop-aws"           % hadoopVersion,
       "org.apache.hadoop"    %  "hadoop-client"        % hadoopVersion,
       "org.apache.hadoop"    %  "hadoop-common"        % hadoopVersion,
-    ),
+    ).map(_.exclude("org.apache.logging.log4j", "log4j-slf4j-impl")),
 
     libraryDependencySchemes += "org.scala-lang.modules" %% "scala-xml" % VersionScheme.Always,
 

@@ -5,6 +5,8 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.S3Event;
 import com.amazonaws.services.lambda.runtime.events.models.s3.S3EventNotification;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -21,6 +23,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 
 public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
+
+    private static final Logger log = LoggerFactory.getLogger(S3ToSqsLambda.class);
 
     private static final String AWS_ENDPOINT = System.getenv().getOrDefault("AWS_ENDPOINT_URL",
             "http://floci:4566");
@@ -63,22 +67,22 @@ public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
             var req = GetParameterRequest.builder().name(paramPath).build();
             return ssm.getParameter(req).parameter().value();
         } catch (Exception e) {
-            System.err.println("SSM read failed for " + paramPath + ": " + e.getMessage());
+            log.error("SSM read failed for {}: {}", paramPath, e.getMessage());
             return null;
         }
     }
 
     @Override
     public String handleRequest(S3Event event, Context context) {
-        context.getLogger().log("SQS queue URL from SSM: " + sqsQueueUrl + "\n");
-        context.getLogger().log("API endpoint from SSM: " + apiEndpoint + "\n");
+        log.info("SQS queue URL from SSM: {}", sqsQueueUrl);
+        log.info("API endpoint from SSM: {}", apiEndpoint);
 
         int totalMessages = 0;
 
         for (S3EventNotification.S3EventNotificationRecord record : event.getRecords()) {
             String bucket = record.getS3().getBucket().getName();
             String key = record.getS3().getObject().getKey();
-            context.getLogger().log("Processing s3://" + bucket + "/" + key + "\n");
+            log.info("Processing s3://{}/{}", bucket, key);
 
             try {
                 String content = readS3Object(bucket, key);
@@ -107,15 +111,15 @@ public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
                             .messageBody(msgBody)
                             .build());
                     totalMessages++;
-                    context.getLogger().log("  Published: emp_id=" + emp.emp_id() + "\n");
+                    log.info("Published: emp_id={}", emp.emp_id());
                 }
             } catch (Exception e) {
-                context.getLogger().log("Error processing " + key + ": " + e.getMessage() + "\n");
+                log.error("Error processing {}: {}", key, e.getMessage());
             }
         }
 
         String result = "Published " + totalMessages + " messages to SQS";
-        context.getLogger().log(result + "\n");
+        log.info(result);
         return result;
     }
 
@@ -155,7 +159,7 @@ public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
                 .parameter().value();
 
         var seen = new java.util.HashSet<String>();
-        System.out.println("employee-file-handler: Watching S3 bucket '" + bucket + "' prefix '" + prefix + "' (poll every " + pollInterval + "s)");
+        log.info("Watching S3 bucket '{}' prefix '{}' (poll every {}s)", bucket, prefix, pollInterval);
 
         while (true) {
             try {
@@ -169,7 +173,7 @@ public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
                     if (seen.contains(key)) continue;
 
                     seen.add(key);
-                    System.out.println("Processing: " + key);
+                    log.info("Processing: {}", key);
 
                     var getReq = GetObjectRequest.builder().bucket(bucket).key(key).build();
                     try (var is = s3.getObject(getReq);
@@ -192,12 +196,12 @@ public class S3ToSqsLambda implements RequestHandler<S3Event, String> {
                             );
                             sqs.sendMessage(SendMessageRequest.builder()
                                     .queueUrl(queueUrl).messageBody(mapper.writeValueAsString(emp)).build());
-                            System.out.println("  Published: emp_id=" + emp.emp_id());
+                            log.info("Published: emp_id={}", emp.emp_id());
                         }
                     }
                 }
             } catch (Exception e) {
-                System.err.println("employee-file-handler: Error during poll cycle: " + e.getMessage());
+                log.error("Error during poll cycle: {}", e.getMessage());
             }
 
             try { Thread.sleep(pollInterval * 1000); } catch (InterruptedException e) { break; }

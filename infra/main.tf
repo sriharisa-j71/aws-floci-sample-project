@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "glue_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -38,6 +40,18 @@ data "aws_iam_policy_document" "glue_job_policy" {
       "rds-db:connect",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+      "logs:PutRetentionPolicy",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:*:log-group:/aws-glue/${var.project_name}-*:*"]
   }
 }
 
@@ -120,9 +134,233 @@ resource "aws_glue_job" "emp_to_s3" {
     "--output_path"         = "s3://${aws_s3_bucket.glue_output.id}/output/"
     "--job-language"        = "scala"
     "--extra-jars"          = "s3://${aws_s3_bucket.glue_artifacts.id}/jars/glue5-spark-job-assembly-1.0.jar"
+
+    "--continuous-log-logGroup"          = "/aws-glue/${var.project_name}-emp-to-s3"
+    "--continuous-log-logStreamPrefix"   = "driver"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-continuous-log-filter"     = "true"
   }
 
   tags = { Name = "${var.project_name}-emp-to-s3" }
+}
+
+# ---------------------------------------------------------------------------
+# CloudWatch Log Groups (real AWS only)
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "glue" {
+  count = local.is_aws ? 1 : 0
+  name              = "/aws-glue/${var.project_name}-emp-to-s3"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = "${var.project_name}-glue-logs" }
+}
+
+resource "aws_cloudwatch_log_group" "file_handler" {
+  count = local.is_aws ? 1 : 0
+  name              = "/aws/lambda/${var.project_name}-employee-file-handler"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = "${var.project_name}-file-handler-logs" }
+}
+
+resource "aws_cloudwatch_log_group" "sal_processor" {
+  count = local.is_aws ? 1 : 0
+  name              = "/aws/lambda/${var.project_name}-employee-sal-processor"
+  retention_in_days = var.log_retention_days
+  tags              = { Name = "${var.project_name}-sal-processor-logs" }
+}
+
+# ---------------------------------------------------------------------------
+# S3 bucket for CloudWatch Log exports (real AWS only)
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "log_export" {
+  count  = local.is_aws ? 1 : 0
+  bucket = var.log_export_bucket
+  tags   = { Name = var.log_export_bucket }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "log_export" {
+  count  = local.is_aws ? 1 : 0
+  bucket = aws_s3_bucket.log_export[0].id
+
+  rule {
+    id     = "expire-old-logs"
+    status = "Enabled"
+    expiration {
+      days = var.log_export_retention_days
+    }
+  }
+}
+
+# IAM policy allowing CloudWatch Logs to write to the S3 export bucket
+data "aws_iam_policy_document" "log_export_bucket_policy" {
+  count = local.is_aws ? 1 : 0
+
+  statement {
+    actions   = ["s3:GetBucketAcl", "s3:PutObject"]
+    resources = [
+      aws_s3_bucket.log_export[0].arn,
+      "${aws_s3_bucket.log_export[0].arn}/*",
+    ]
+    principals {
+      type        = "Service"
+      identifiers = ["logs.${var.aws_region}.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "log_export" {
+  count  = local.is_aws ? 1 : 0
+  bucket = aws_s3_bucket.log_export[0].id
+  policy = data.aws_iam_policy_document.log_export_bucket_policy[0].json
+}
+
+# ---------------------------------------------------------------------------
+# CloudWatch → S3 log forwarder Lambda (real AWS only)
+# ---------------------------------------------------------------------------
+data "archive_file" "log_forwarder" {
+  count       = local.is_aws ? 1 : 0
+  type        = "zip"
+  output_path = "${path.module}/../lambda-log-forwarder/target/log-forwarder.zip"
+  source {
+    content  = <<-PYTHON
+import gzip
+import json
+import os
+from datetime import datetime, timezone
+
+import boto3
+
+s3 = boto3.client("s3")
+BUCKET = os.environ["LOG_EXPORT_BUCKET"]
+
+def lambda_handler(event, context):
+    payload = gzip.decompress(base64_decode(event["awslogs"]["data"]))
+    logs = json.loads(payload)
+
+    group = logs["logGroup"]
+    stream = logs["logStream"]
+    now = datetime.now(timezone.utc)
+    prefix = f"{group}/{now:%Y/%m/%d}/{stream}/{context.aws_request_id}"
+
+    lines = "\n".join(
+        json.dumps(e) for e in logs["logEvents"]
+    )
+    s3.put_object(Bucket=BUCKET, Key=f"{prefix}.jsonl", Body=lines)
+    return {"statusCode": 200}
+
+def base64_decode(data):
+    import base64
+    return base64.b64decode(data)
+PYTHON
+    filename = "index.py"
+  }
+}
+
+resource "aws_iam_role" "log_forwarder" {
+  count = local.is_aws ? 1 : 0
+  name  = "${var.project_name}-log-forwarder-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "log_forwarder_policy" {
+  count = local.is_aws ? 1 : 0
+  statement {
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.log_export[0].arn}/*"]
+  }
+  statement {
+    actions   = ["logs:DescribeLogGroups", "logs:DescribeLogStreams"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "log_forwarder" {
+  count  = local.is_aws ? 1 : 0
+  name   = "${var.project_name}-log-forwarder-policy"
+  role   = aws_iam_role.log_forwarder[0].id
+  policy = data.aws_iam_policy_document.log_forwarder_policy[0].json
+}
+
+resource "aws_lambda_function" "log_forwarder" {
+  count = local.is_aws ? 1 : 0
+
+  function_name = "${var.project_name}-log-forwarder"
+  role          = aws_iam_role.log_forwarder[0].arn
+  runtime       = "python3.12"
+  handler       = "index.lambda_handler"
+  filename      = data.archive_file.log_forwarder[0].output_path
+  source_code_hash = data.archive_file.log_forwarder[0].output_base64sha256
+  memory_size   = 256
+  timeout       = 120
+
+  environment {
+    variables = {
+      LOG_EXPORT_BUCKET = aws_s3_bucket.log_export[0].id
+    }
+  }
+
+  tags = { Name = "${var.project_name}-log-forwarder" }
+}
+
+# Subscription filters: each log group → the forwarder Lambda
+resource "aws_cloudwatch_log_subscription_filter" "glue" {
+  count           = local.is_aws ? 1 : 0
+  name            = "${var.project_name}-glue-to-s3"
+  log_group_name  = aws_cloudwatch_log_group.glue[0].name
+  filter_pattern  = ""
+  destination_arn = aws_lambda_function.log_forwarder[0].arn
+  depends_on      = [
+    aws_lambda_permission.log_forwarder_glue,
+    aws_lambda_permission.log_forwarder_file_handler,
+    aws_lambda_permission.log_forwarder_sal_processor,
+  ]
+}
+
+resource "aws_cloudwatch_log_subscription_filter" "file_handler" {
+  count           = local.is_aws ? 1 : 0
+  name            = "${var.project_name}-file-handler-to-s3"
+  log_group_name  = aws_cloudwatch_log_group.file_handler[0].name
+  filter_pattern  = ""
+  destination_arn = aws_lambda_function.log_forwarder[0].arn
+}
+
+resource "aws_cloudwatch_log_subscription_filter" "sal_processor" {
+  count           = local.is_aws ? 1 : 0
+  name            = "${var.project_name}-sal-processor-to-s3"
+  log_group_name  = aws_cloudwatch_log_group.sal_processor[0].name
+  filter_pattern  = ""
+  destination_arn = aws_lambda_function.log_forwarder[0].arn
+}
+
+resource "aws_lambda_permission" "log_forwarder_glue" {
+  count         = local.is_aws ? 1 : 0
+  statement_id  = "AllowExecutionFromCloudWatchGlue"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.log_forwarder[0].function_name
+  principal     = "logs.${var.aws_region}.amazonaws.com"
+  source_arn    = aws_cloudwatch_log_group.glue[0].arn
+}
+
+resource "aws_lambda_permission" "log_forwarder_file_handler" {
+  count         = local.is_aws ? 1 : 0
+  statement_id  = "AllowExecutionFromCloudWatchFileHandler"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.log_forwarder[0].function_name
+  principal     = "logs.${var.aws_region}.amazonaws.com"
+  source_arn    = aws_cloudwatch_log_group.file_handler[0].arn
+}
+
+resource "aws_lambda_permission" "log_forwarder_sal_processor" {
+  count         = local.is_aws ? 1 : 0
+  statement_id  = "AllowExecutionFromCloudWatchSalProcessor"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.log_forwarder[0].function_name
+  principal     = "logs.${var.aws_region}.amazonaws.com"
+  source_arn    = aws_cloudwatch_log_group.sal_processor[0].arn
 }
 
 # ---------------------------------------------------------------------------

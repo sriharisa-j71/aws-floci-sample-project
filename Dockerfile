@@ -41,7 +41,7 @@ RUN rm -rf \
     /usr/share/aws/glue-pds/jars/lombok-*.jar \
     /usr/share/aws/glue-pds/jars/jquery-*.jar \
     /usr/share/aws/glue-pds/jars/cloudformation-*.jar \
-    /usr/share/aws/glue-pds/jars/cloudwatch-*.jar \
+    # /usr/share/aws/glue-pds/jars/cloudwatch-*.jar \  # kept — needed for Glue continuous logging on real AWS
     /usr/share/aws/glue-pds/jars/lakeformation-*.jar \
     /usr/share/aws/glue-pds/jars/kinesis-*.jar \
     /usr/share/aws/glue-pds/jars/dynamodb-*.jar \

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 echo "=== Running Glue job ==="
+export JAVA_TOOL_OPTIONS="-Dslf4j.provider=ch.qos.logback.classic.spi.LogbackServiceProvider"
 exec spark-submit \
   --class com.example.Main \
   --master local[*] \
