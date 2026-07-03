@@ -17,6 +17,6 @@ exec spark-submit \
   jdbc:postgresql://postgres:5432/postgres \
   admin \
   secret123 \
-  'SELECT emp_id, emp_name, department, salary, hire_date FROM public.emp ORDER BY emp_id' \
-  s3a://emp-output/data/ \
+  s3a://investor-output/data/ \
+  "${SEGMENT:-Wealth}" \
   "${WIREMOCK_ENDPOINT:-http://wiremock:8080}"

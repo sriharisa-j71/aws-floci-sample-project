@@ -46,6 +46,6 @@ PGPASSWORD=secret123 psql -h "$FLOCI_HOST" -p 7001 -U admin -d postgres -f /opt/
 PGPASSWORD=secret123 psql -h "$FLOCI_HOST" -p 7001 -U admin -d postgres -f /opt/sql/data.sql
 echo "=== Creating S3 buckets ==="
 aws s3 mb s3://emp-input --endpoint-url "$ENDPOINT_URL" 2>/dev/null || true
-aws s3 mb s3://emp-output --endpoint-url "$ENDPOINT_URL" 2>/dev/null || true
+aws s3 mb s3://investor-output --endpoint-url "$ENDPOINT_URL" 2>/dev/null || true
 
 echo "=== RDS setup complete ==="

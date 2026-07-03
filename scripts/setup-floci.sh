@@ -5,7 +5,7 @@ FLOCI_ENDPOINT="http://localhost:4566"
 AWS_REGION="us-east-1"
 JDBC_USER="admin"
 JDBC_PASSWORD="secret123"
-SQL_QUERY="SELECT emp_id, emp_name, department, salary, hire_date FROM public.emp ORDER BY emp_id"
+SQL_QUERY="SELECT customer_id, full_name, annual_income_usd, customer_segment, domicile_currency, join_date FROM public.investors ORDER BY customer_id"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "=== Starting FLOCI ==="
@@ -55,9 +55,9 @@ echo "RDS JDBC URL: $JDBC_URL"
 echo "=== Seeding database via SQL files ==="
 sleep 5
 PGPASSWORD="$JDBC_PASSWORD" psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$JDBC_USER" -d postgres \
-  -f "$SCRIPT_DIR/glue-job/sql/schema.sql"
+  -f "$SCRIPT_DIR/db/01-schema.sql"
 PGPASSWORD="$JDBC_PASSWORD" psql -h "$RDS_HOST" -p "$RDS_PORT" -U "$JDBC_USER" -d postgres \
-  -f "$SCRIPT_DIR/glue-job/sql/data.sql"
+  -f "$SCRIPT_DIR/db/02-data.sql"
 echo "Database seeded from SQL files."
 
 echo "=== Creating Glue database and table in FLOCI Data Catalog ==="
@@ -69,20 +69,21 @@ aws glue create-database \
 aws glue create-table \
   --database-name analytics \
   --table-input '{
-    "Name": "emp",
+    "Name": "investors",
     "StorageDescriptor": {
-      "Location": "s3://emp-input/data/",
+      "Location": "s3://investor-input/data/",
       "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
       "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
       "SerdeInfo": {
         "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
       },
       "Columns": [
-        {"Name": "emp_id",     "Type": "int"},
-        {"Name": "emp_name",   "Type": "string"},
-        {"Name": "department", "Type": "string"},
-        {"Name": "salary",     "Type": "double"},
-        {"Name": "hire_date",  "Type": "date"}
+        {"Name": "customer_id",       "Type": "int"},
+        {"Name": "full_name",         "Type": "string"},
+        {"Name": "annual_income_usd", "Type": "double"},
+        {"Name": "customer_segment",  "Type": "string"},
+        {"Name": "domicile_currency", "Type": "string"},
+        {"Name": "join_date",         "Type": "date"}
       ]
     }
   }' \
@@ -90,8 +91,8 @@ aws glue create-table \
   --region "$AWS_REGION" 2>/dev/null || true
 
 echo "=== Creating S3 buckets in FLOCI ==="
-aws s3 mb s3://emp-input  --endpoint-url "$FLOCI_ENDPOINT" 2>/dev/null || true
-aws s3 mb s3://emp-output --endpoint-url "$FLOCI_ENDPOINT" 2>/dev/null || true
+aws s3 mb s3://investor-input  --endpoint-url "$FLOCI_ENDPOINT" 2>/dev/null || true
+aws s3 mb s3://investor-output --endpoint-url "$FLOCI_ENDPOINT" 2>/dev/null || true
 
 cat <<EOF
 
@@ -104,9 +105,9 @@ cat <<EOF
   JDBC password:    $JDBC_PASSWORD
   SQL query:        $SQL_QUERY
   Glue database:    analytics
-  Glue table:       emp
-  S3 input bucket:  emp-input
-  S3 output bucket: emp-output
+  Glue table:       investors
+  S3 input bucket:  investor-input
+  S3 output bucket: investor-output
 =========================================
 
 Run locally:   docker compose up rds-setup glue-runner

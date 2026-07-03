@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/segment/([a-zA-Z ]+)"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "exists": true,
+      "segment": "{{request.pathSegments.[1]}}",
+      "status": "active"
+    },
+    "transformers": ["response-template"]
+  }
+}

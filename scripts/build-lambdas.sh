@@ -4,14 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "=== Building Lambda: employee-file-handler ==="
-cd "$PROJECT_DIR/lambda-employee-file-handler"
+echo "=== Building Lambda: investor-file-handler ==="
+cd "$PROJECT_DIR/lambda-investor-file-handler"
 mvn -q package -DskipTests
-echo "  JAR: target/employee-file-handler-1.0.jar"
+echo "  JAR: target/investor-file-handler-1.0.jar"
 
-echo "=== Building Lambda: employee-sal-processor ==="
-cd "$PROJECT_DIR/lambda-employee-sal-processor"
+echo "=== Building Lambda: investor-sal-processor ==="
+cd "$PROJECT_DIR/lambda-investor-sal-processor"
 mvn -q package -DskipTests
-echo "  JAR: target/employee-sal-processor-1.0.jar"
+echo "  JAR: target/investor-sal-processor-1.0.jar"
 
 echo "=== Lambda builds complete ==="

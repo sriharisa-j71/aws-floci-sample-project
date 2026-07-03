@@ -45,13 +45,28 @@ services:
       POSTGRES_PASSWORD: secret123
       POSTGRES_DB: postgres
     volumes:
-      - ./glue-job/sql:/docker-entrypoint-initdb.d
+      - ./db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
       interval: 2s
       timeout: 5s
       retries: 10
       start_period: 5s
+
+  seed-generator:
+    container_name: seed-generator
+    image: alpine:3.20
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./tools/generate-data/generate-data:/opt/generate-data
+    entrypoint: ["/opt/generate-data"]
+    command:
+      - "-count=100"
+      - "-family-pct=0.01"
+      - "-workers=4"
+      - "-dsn=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable"
 
   infra-setup:
     container_name: infra-setup
@@ -65,67 +80,44 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
     volumes:
-      - ./lambda-employee-file-handler/target/employee-file-handler-1.0.jar:/tmp/employee-file-handler.jar
-      - ./lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar:/tmp/employee-sal-processor.jar
-    entrypoint: ["/bin/sh", "-c"]
-    command: [
-      "
-        echo '=== Creating SSM params ===' &&
-        aws ssm put-parameter --name /emp/api/endpoint --value http://wiremock:8080 --type String --overwrite &&
-        aws ssm put-parameter --name /emp/api/employee-check-enabled --value true --type String --overwrite &&
-        echo '=== Creating SQS queue ===' &&
-        aws sqs create-queue --queue-name emp-processing &&
-        SQS_URL=$$(aws sqs get-queue-url --queue-name emp-processing --query QueueUrl --output text) &&
-        aws ssm put-parameter --name /emp/sqs/queue-url --value \"$$SQS_URL\" --type String --overwrite &&
-        echo '=== Creating S3 buckets ===' &&
-        aws s3 mb s3://glue-artifacts --region us-east-1 \
-          2>/dev/null || true &&
-        aws s3 mb s3://emp-output --region us-east-1 \
-          2>/dev/null || true &&
-        echo '=== Uploading Lambda JARs to S3 ===' &&
-        aws s3 cp /tmp/employee-file-handler.jar s3://glue-artifacts/lambdas/employee-file-handler-1.0.jar &&
-        aws s3 cp /tmp/employee-sal-processor.jar s3://glue-artifacts/lambdas/employee-sal-processor-1.0.jar &&
-        echo '=== Creating Lambda: employee-file-handler ===' &&
-        aws lambda create-function \
-          --function-name employee-file-handler \
-          --runtime java17 \
-          --role arn:aws:iam::000000000000:role/lambda-exec-role \
-          --handler com.example.S3ToSqsLambda::handleRequest \
-          --code S3Bucket=glue-artifacts,S3Key=lambdas/employee-file-handler-1.0.jar \
-          --timeout 60 \
-          --memory-size 512 \
-          --environment Variables=\"{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}\" \
-          2>/dev/null || \
-        aws lambda update-function-code \
-          --function-name employee-file-handler \
-          --s3-bucket glue-artifacts --s3-key lambdas/employee-file-handler-1.0.jar &&
-        echo '=== Creating Lambda: employee-sal-processor ===' &&
-        aws lambda create-function \
-          --function-name employee-sal-processor \
-          --runtime java17 \
-          --role arn:aws:iam::000000000000:role/lambda-exec-role \
-          --handler com.example.SqsProcessorLambda::handleRequest \
-          --code S3Bucket=glue-artifacts,S3Key=lambdas/employee-sal-processor-1.0.jar \
-          --timeout 60 \
-          --memory-size 512 \
-          --environment Variables=\"{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}\" \
-          2>/dev/null || \
-        aws lambda update-function-code \
-          --function-name employee-sal-processor \
-          --s3-bucket glue-artifacts --s3-key lambdas/employee-sal-processor-1.0.jar &&
-        echo '=== Setting up S3 notification (emp-output → employee-file-handler) ===' &&
-        aws s3api put-bucket-notification-configuration \
-          --bucket emp-output \
-          --notification-configuration '{\"LambdaFunctionConfigurations\":[{\"LambdaFunctionArn\":\"arn:aws:lambda:us-east-1:000000000000:function:employee-file-handler\",\"Events\":[\"s3:ObjectCreated:*\"],\"Filter\":{\"Key\":{\"FilterRules\":[{\"Name\":\"suffix\",\"Value\":\".csv\"}]}}}]}' &&
-        echo '=== Setting up SQS event mapping (emp-processing → employee-sal-processor) ===' &&
-        aws lambda create-event-source-mapping \
-          --function-name employee-sal-processor \
-          --event-source-arn arn:aws:sqs:us-east-1:000000000000:emp-processing \
-          --batch-size 10 \
-          2>/dev/null || true &&
+      - ./lambda-investor-file-handler/target/investor-file-handler-1.0.jar:/tmp/investor-file-handler.jar
+      - ./lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar:/tmp/investor-sal-processor.jar
+      - ./lambda-currency-refresh/bootstrap:/tmp/currency-refresh-bootstrap
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        echo '=== Creating SSM params ==='
+        aws ssm put-parameter --name /investor/api/endpoint --value http://wiremock:8080 --type String --overwrite
+        echo '=== Creating SQS queues ==='
+        DLQ_URL=$$(aws sqs create-queue --queue-name investor-processing-dlq --query QueueUrl --output text)
+        DLQ_ARN=$$(aws sqs get-queue-attributes --queue-url "$$DLQ_URL" --attribute-names QueueArn --query Attributes.QueueArn --output text)
+        MAIN_URL=$$(aws sqs create-queue --queue-name investor-processing --query QueueUrl --output text)
+        python3 -c "import json,sys; policy=json.dumps({'deadLetterTargetArn':sys.argv[1],'maxReceiveCount':3}); print(json.dumps({'RedrivePolicy':policy}))" "$$DLQ_ARN" > /tmp/redrive.json
+        aws sqs set-queue-attributes --queue-url "$$MAIN_URL" --attributes file:///tmp/redrive.json
+        aws ssm put-parameter --name /investor/sqs/queue-url --value "$$MAIN_URL" --type String --overwrite
+        echo '=== Creating S3 buckets ==='
+        aws s3 mb s3://glue-artifacts --region us-east-1 2>/dev/null || true
+        aws s3 mb s3://investor-output --region us-east-1 2>/dev/null || true
+        aws s3 mb s3://currency-rates-input --region us-east-1 2>/dev/null || true
+        echo '=== Uploading Lambda JARs to S3 ==='
+        aws s3 cp /tmp/investor-file-handler.jar s3://glue-artifacts/lambdas/investor-file-handler-1.0.jar
+        aws s3 cp /tmp/investor-sal-processor.jar s3://glue-artifacts/lambdas/investor-sal-processor-1.0.jar
+        echo '=== Creating Lambda: investor-file-handler ==='
+        aws lambda create-function --function-name investor-file-handler --runtime java17 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.S3ToSqsLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-file-handler-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-file-handler --s3-bucket glue-artifacts --s3-key lambdas/investor-file-handler-1.0.jar
+        echo '=== Creating Lambda: investor-sal-processor ==='
+        aws lambda create-function --function-name investor-sal-processor --runtime java17 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.SqsProcessorLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-sal-processor-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-sal-processor --s3-bucket glue-artifacts --s3-key lambdas/investor-sal-processor-1.0.jar
+        echo '=== Creating Lambda: currency-refresh ==='
+        aws s3 cp /tmp/currency-refresh-bootstrap s3://glue-artifacts/lambdas/currency-refresh-bootstrap
+        aws lambda create-function --function-name currency-refresh --runtime provided.al2023 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler bootstrap --code S3Bucket=glue-artifacts,S3Key=lambdas/currency-refresh-bootstrap --timeout 60 --memory-size 256 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1,DB_DSN=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable}" 2>/dev/null || aws lambda update-function-code --function-name currency-refresh --s3-bucket glue-artifacts --s3-key lambdas/currency-refresh-bootstrap
+        echo '=== Setting up S3 notification (investor-output → investor-file-handler) ==='
+        aws s3api put-bucket-notification-configuration --bucket investor-output --notification-configuration '{"LambdaFunctionConfigurations":[{"LambdaFunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:investor-file-handler","Events":["s3:ObjectCreated:*"],"Filter":{"Key":{"FilterRules":[{"Name":"suffix","Value":".csv"}]}}}]}'
+        echo '=== Setting up S3 notification (currency-rates-input → currency-refresh) ==='
+        aws s3api put-bucket-notification-configuration --bucket currency-rates-input --notification-configuration '{"LambdaFunctionConfigurations":[{"LambdaFunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:currency-refresh","Events":["s3:ObjectCreated:*"]}]}'
+        echo '=== Setting up SQS event mapping (investor-processing → investor-sal-processor) ==='
+        aws lambda create-event-source-mapping --function-name investor-sal-processor --event-source-arn arn:aws:sqs:us-east-1:000000000000:investor-processing --batch-size 10 --function-response-types ReportBatchItemFailures 2>/dev/null || true
         echo '=== Infra setup complete ==='
-      "
-    ]
 
   glue-runner:
     container_name: glue-runner

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ENDPOINT="${AWS_ENDPOINT_URL:-http://localhost:4566}"
-DEFAULT_GROUP="/aws/lambda/employee-sal-processor"
+DEFAULT_GROUP="/aws/lambda/investor-sal-processor"
 
 usage() {
   cat <<EOF
@@ -29,7 +29,7 @@ Options:
 Examples:
   $(basename "$0") groups
   $(basename "$0") search "exists=true"
-  $(basename "$0") search "ERROR" /aws/lambda/employee-file-handler
+  $(basename "$0") search "ERROR" /aws/lambda/investor-file-handler
   $(basename "$0") errors
   $(basename "$0") employees
 EOF
@@ -148,7 +148,7 @@ for line in data:
     ;;
 
   publish)
-    GROUP="/aws/lambda/employee-file-handler"
+    GROUP="/aws/lambda/investor-file-handler"
     echo "=== SQS Publish Events ==="
     aws_logs filter-log-events \
       --log-group-name "$GROUP" \
@@ -167,9 +167,9 @@ print(f'  --- {len(data)} events across all runs ---')
 "
     ;;
 
-  employees)
-    GROUP="/aws/lambda/employee-sal-processor"
-    echo "=== Employee API Check Results ==="
+  investors)
+    GROUP="/aws/lambda/investor-sal-processor"
+    echo "=== Investor API Check Results ==="
     aws_logs filter-log-events \
       --log-group-name "$GROUP" \
       --filter-pattern "exists=" \

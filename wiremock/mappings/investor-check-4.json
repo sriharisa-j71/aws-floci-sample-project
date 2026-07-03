@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/investor/4"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "exists": true,
+      "customer_id": 4,
+      "full_name": "Dave Wilson",
+      "customer_segment": "Retail"
+    }
+  }
+}

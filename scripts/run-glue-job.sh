@@ -4,7 +4,7 @@ set -euo pipefail
 # ------------------------------------------------------------------
 # Script: run-glue-job.sh
 # Description:
-#   Run the EMP-to-S3 Glue job either via the Glue runner Docker
+#   Run the investor Glue job either via the Glue runner Docker
 #   container (--mode docker) or via the AWS Glue API (--mode aws).
 #
 #   Used standalone or from OpenTofu via terraform_data.local-exec.
@@ -27,8 +27,7 @@ Options (--mode docker):
   --jdbc-url  URL        PostgreSQL JDBC URL           (default: jdbc:postgresql://postgres:5432/postgres)
   --jdbc-user USER       PostgreSQL user               (default: admin)
   --jdbc-pass PASS       PostgreSQL password           (default: secret123)
-  --query     SQL        SQL query                     (default: SELECT ... FROM public.emp ...)
-  --output    S3_PATH    S3 output path                (default: s3a://emp-output/data/)
+  --output    S3_PATH    S3 output path                (default: s3a://investor-output/data/)
 
 Options (--mode aws):
   --job-name  NAME       Glue job name                 (env: GLUE_JOB_NAME)
@@ -42,8 +41,8 @@ Examples:
   $0 --mode docker
 
   # AWS / Floci: trigger via API
-  $0 --mode aws --job-name emp-glue-job-emp-to-s3 --wait
-  $0 --mode aws --job-name emp-glue-job-emp-to-s3 --endpoint-url http://localhost:4566 --wait
+  $0 --mode aws --job-name investor-glue-job --wait
+  $0 --mode aws --job-name investor-glue-job --endpoint-url http://localhost:4566 --wait
 EOF
   exit 1
 }
@@ -58,8 +57,7 @@ JOB_JAR=""
 JDBC_URL="jdbc:postgresql://postgres:5432/postgres"
 JDBC_USER="admin"
 JDBC_PASS="secret123"
-JDBC_QUERY="SELECT emp_id, emp_name, department, salary, hire_date FROM public.emp ORDER BY emp_id"
-OUTPUT_PATH="s3a://emp-output/data/"
+OUTPUT_PATH="s3a://investor-output/data/"
 
 JOB_NAME="${GLUE_JOB_NAME:-}"
 REGION="${AWS_REGION:-us-east-1}"
@@ -76,7 +74,6 @@ while [[ $# -gt 0 ]]; do
     --jdbc-url)      JDBC_URL="$2";       shift 2 ;;
     --jdbc-user)     JDBC_USER="$2";      shift 2 ;;
     --jdbc-pass)     JDBC_PASS="$2";      shift 2 ;;
-    --query)         JDBC_QUERY="$2";     shift 2 ;;
     --output)        OUTPUT_PATH="$2";    shift 2 ;;
     --job-name)      JOB_NAME="$2";       shift 2 ;;
     --region)        REGION="$2";         shift 2 ;;

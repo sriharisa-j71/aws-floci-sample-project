@@ -1,50 +1,59 @@
-# Architecture Diagram
+# Architecture
 
 ## Data Flow
 
 ```mermaid
 flowchart LR
   subgraph DataSources["Data Sources"]
-    PG[("PostgreSQL\nemp table")]
+    PG[("PostgreSQL\ninvestors table")]
   end
 
   subgraph Compute["Compute Layer"]
-    GLUE["AWS Glue Job\nScala/Spark\nEmpToS3Core"]
-    L1["Lambda: employee-file-handler\nJava 17\nS3Event → SQS"]
-    L2["Lambda: employee-sal-processor\nJava 17\nSQS → WireMock"]
+    GLUE["AWS Glue Job\nScala/Spark\nInvestorToS3Core"]
+    L1["Lambda: investor-file-handler\nJava 17\nS3Event → SQS"]
+    L2["Lambda: investor-sal-processor\nJava 17\nSQS → WireMock"]
+    L3["Lambda: currency-refresh\nGo (provided.al2023)\nS3 → pgx batch"]
   end
 
   subgraph Storage["Storage & Messaging"]
-    S3_OUT[("S3: emp-output\npipe-delimited CSV")]
-    SQS[("SQS: emp-processing\n1 msg / employee")]
-    SSM[("SSM Parameter Store\n/emp/api/endpoint\n/emp/sqs/queue-url\n/emp/api/employee-check-enabled")]
+    S3_OUT[("S3: investor-output\npipe-delimited CSV")]
+    S3_CUR[("S3: currency-rates-input")]
+    SQS[("SQS: investor-processing\n1 msg / investor")]
+    DLQ[("SQS: DLQ\nunknown investors")]
+    SSM[("SSM Parameter Store\n/investor/api/endpoint\n/investor/sqs/queue-url")]
   end
 
   subgraph ExternalAPI["External API"]
-    WM["WireMock :8080\nGET /employee/{id}"]
+    WM["WireMock :8080\nGET /investor/{id}\nGET /segment/{segment}"]
   end
 
-  subgraph Logging["Logging (current)"]
+  subgraph Logging["Logging"]
     L1_LOG["stdout / stderr\ncontext.getLogger"]
     L2_LOG["stdout / stderr\ncontext.getLogger"]
-    GLUE_LOG["println"]
-    S3_LOG[("CloudWatch Logs\nauto (AWS deploy)")]
+    GLUE_LOG["SLF4J + Logback\nLogstash JSON"]
+    L3_LOG["stdout\nlog.Printf"]
+    CW[("CloudWatch Logs\n(auto on AWS deploy)")]
   end
 
   PG -->|JDBC query| GLUE
-  GLUE -->|GET /employee/{id}| WM
+  GLUE -->|GET /segment/{segment}| WM
   GLUE -->|pipe-delimited CSV| S3_OUT
   S3_OUT -->|S3 ObjectCreated:*.csv| L1
   L1 -->|1 SQS message / record| SQS
   SQS -->|SQSEvent| L2
-  L2 -->|GET /employee/{id}| WM
+  L2 -->|GET /investor/{id}| WM
+  L2 -->|exists:false → DLQ| DLQ
   L1 -.->|reads at init| SSM
   L2 -.->|reads at init| SSM
   GLUE -.->|reads at init| SSM
 
-  L1 -.-> L1_LOG -.-> S3_LOG
-  L2 -.-> L2_LOG -.-> S3_LOG
-  GLUE -.-> GLUE_LOG -.-> S3_LOG
+  S3_CUR -->|S3 ObjectCreated:*| L3
+  L3 -->|TRUNCATE + batch INSERT| PG
+
+  L1 -.-> L1_LOG -.-> CW
+  L2 -.-> L2_LOG -.-> CW
+  GLUE -.-> GLUE_LOG -.-> CW
+  L3 -.-> L3_LOG -.-> CW
 ```
 
 ## Deployment & Infrastructure
@@ -59,11 +68,11 @@ flowchart TD
     DC --> GR["glue-runner\nSpark container"]
     DC --> IS["infra-setup\naws-cli container"]
     IS -->|aws ssm| SSM[SSM Parameters]
-    IS -->|aws sqs| SQS[SQS Queue]
+    IS -->|aws sqs| SQS[SQS Queue + DLQ]
     IS -->|aws s3| S3_BUCKETS[S3 Buckets]
-    IS -->|aws lambda| LAMBDAS[Lambda Functions]
-    IS -->|aws s3api| S3_NOTIF[S3 Notification]
-    IS -->|aws lambda create-event-source-mapping| SQS_MAP[SQS → Lambda]
+    IS -->|aws lambda| LAMBDAS[Lambda Functions\nfile-handler, sal-processor\ncurrency-refresh]
+    IS -->|aws s3api| S3_NOTIF[S3 Notifications\ninvestor-output + currency-rates-input]
+    IS -->|aws lambda create-event-source-mapping| SQS_MAP[SQS → Lambda mapping]
   end
 
   subgraph AWSDeploy["Real AWS (OpenTofu)"]
@@ -72,11 +81,12 @@ flowchart TD
     TF --> TF_S3[S3 Buckets\n+ Script & JAR uploads]
     TF --> TF_GLUE[Glue Job]
     TF --> TF_SSM[SSM Parameters]
-    TF --> TF_SQS[SQS Queue]
+    TF --> TF_SQS[SQS Queue + DLQ]
     TF --> TF_L1[Lambda: file-handler]
     TF --> TF_L2[Lambda: sal-processor]
     TF --> TF_S3N[S3 → Lambda notification]
     TF --> TF_SQSM[SQS → Lambda mapping]
+    TF --> TF_CW[CloudWatch Log Groups]
     TF --> TF_RUN[terraform_data\n: glue start-job-run]
   end
 
@@ -84,6 +94,7 @@ flowchart TD
     SBT["sbt assembly\nScala/Spark JAR"]
     MVN1["mvn package\nLambda 1 JAR"]
     MVN2["mvn package\nLambda 2 JAR"]
+    GO_BUILD["go build + UPX\ncurrency-refresh bootstrap"]
     DOCKER["docker build\nglue-scala-minimal"]
   end
 ```
@@ -95,17 +106,20 @@ mindmap
   root((aws-gluejob-floci))
     GlueJob
       Main.scala
-      EmpToS3Core.scala
-      EmpToS3Job.scala
+      InvestorToS3Core.scala
       build.sbt
-    Lambda1_S3ToSQS
+    Lambda_FileHandler
       S3ToSqsLambda.java
-      EmployeeRecord.java
+      InvestorRecord.java
       pom.xml
-    Lambda2_SQSProcessor
+    Lambda_SALProcessor
       SqsProcessorLambda.java
-      EmployeeRecord.java
+      InvestorRecord.java
       pom.xml
+    Lambda_CurrencyRefresh
+      main.go
+      go.mod
+      build.sh
     Infrastructure
       infra/main.tf
       infra/variables.tf
@@ -119,13 +133,18 @@ mindmap
       setup-floci.sh
       setup-ssm.sh
       rds-setup.sh
+      search-logs.sh
     Config
       docker-compose.yml
       Dockerfile
       .gitignore
       .dockerignore
     WireMock
-      employee-check-*.json
+      investor-check-*.json
+      investor-check-segment.json
+    Tools
+      generate-data/main.go
+      generate-currency-file/main.go
     Test
       EmpToS3JobSimulation.scala
 ```
@@ -135,31 +154,50 @@ mindmap
 ```mermaid
 sequenceDiagram
   participant PG as PostgreSQL
+  participant GEN as Go Generator
   participant GLUE as Glue Job (Spark)
   participant WM as WireMock
-  participant S3 as S3 (emp-output)
+  participant S3 as S3 (investor-output)
   participant L1 as Lambda: file-handler
-  participant SQS as SQS (emp-processing)
+  participant SQS as SQS (investor-processing)
   participant L2 as Lambda: sal-processor
+  participant DLQ as DLQ
 
-  GLUE->>PG: JDBC SELECT emp ORDER BY emp_id
-  PG-->>GLUE: 5 employee rows
-  loop For each employee (coalesce 1)
-    GLUE->>WM: GET /employee/{id}
-    WM-->>GLUE: {"exists":true,...}
-  end
-  GLUE->>S3: Write pipe-delimited CSV
+  GEN->>PG: INSERT N investors + risks + investments + liabilities
+  Note over GEN,PG: Bulk CopyFrom in transactions
+
+  GLUE->>PG: JDBC SELECT investors WHERE segment='Wealth'
+  PG-->>GLUE: M investor rows
+  GLUE->>WM: GET /segment/{segment}
+  WM-->>GLUE: {"exists":true,"segment":"Wealth","status":"active"}
+  GLUE->>S3: Write pipe-delimited CSV (coalesce 1)
 
   Note over S3,L1: Floci/AWS detects ObjectCreated:*.csv
   S3-->>L1: Trigger S3Event
   L1->>S3: Read CSV
-  L1->>SQS: Publish 1 msg/employee (5 total)
+  L1->>SQS: Publish 1 msg/investor (M total)
 
   Note over SQS,L2: Floci/AWS detects SQS messages
   SQS-->>L2: Trigger SQSEvent
+
   loop For each message
-    L2->>WM: GET /employee/{id}
-    WM-->>L2: {"exists":true,...}
-    L2->>SQS: DeleteMessage
+    L2->>WM: GET /investor/{id}
+    alt exists: true (seed IDs 1-5)
+      WM-->>L2: {"exists":true,"customer_id":N}
+      L2->>SQS: DeleteMessage
+    else exists: false (generated IDs 6+)
+      WM-->>L2: {"exists":false}
+      L2-->>DLQ: BatchItemFailure → DLQ
+    end
   end
+
+  Note over S3,DLQ: Currency refresh (parallel flow)
+  participant CS3 as S3 (currency-rates-input)
+  participant L3 as Lambda: currency-refresh
+
+  GEN->>CS3: Upload rates file
+  CS3-->>L3: Trigger S3Event
+  L3->>CS3: Download file
+  L3->>PG: TRUNCATE currency_rates
+  L3->>PG: Batch INSERT N rates
 ```
