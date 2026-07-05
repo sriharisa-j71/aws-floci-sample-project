@@ -5,34 +5,28 @@
 ```mermaid
 flowchart LR
   subgraph DataSources["Data Sources"]
-    PG[("PostgreSQL\ninvestors table")]
+    PG[("PostgreSQL\n7 tables")]
+    CUR_FILE["Currency Rates File\npipe-delimited CSV"]
   end
 
   subgraph Compute["Compute Layer"]
     GLUE["AWS Glue Job\nScala/Spark\nInvestorToS3Core"]
     L1["Lambda: investor-file-handler\nJava 17\nS3Event → SQS"]
-    L2["Lambda: investor-sal-processor\nJava 17\nSQS → WireMock"]
+    L2["Lambda: investor-sal-processor\nJava 17\nSQS → WireMock + DB"]
     L3["Lambda: currency-refresh\nGo (provided.al2023)\nS3 → pgx batch"]
+    L4["Lambda: risk-score-calculator\nGo (provided.al2023)\nS3 → DB scores"]
   end
 
   subgraph Storage["Storage & Messaging"]
     S3_OUT[("S3: investor-output\npipe-delimited CSV")]
     S3_CUR[("S3: currency-rates-input")]
     SQS[("SQS: investor-processing\n1 msg / investor")]
-    DLQ[("SQS: DLQ\nunknown investors")]
+    DLQ[("SQS: DLQ\nfailed investors")]
     SSM[("SSM Parameter Store\n/investor/api/endpoint\n/investor/sqs/queue-url")]
   end
 
-  subgraph ExternalAPI["External API"]
-    WM["WireMock :8080\nGET /investor/{id}\nGET /segment/{segment}"]
-  end
-
-  subgraph Logging["Logging"]
-    L1_LOG["stdout / stderr\ncontext.getLogger"]
-    L2_LOG["stdout / stderr\ncontext.getLogger"]
-    GLUE_LOG["SLF4J + Logback\nLogstash JSON"]
-    L3_LOG["stdout\nlog.Printf"]
-    CW[("CloudWatch Logs\n(auto on AWS deploy)")]
+  subgraph ExternalAPI["Mock API"]
+    WM["WireMock :8080\nGET /investor/{id}\nGET /segment/{segment}\nPOST /risk-score/{id}"]
   end
 
   PG -->|JDBC query| GLUE
@@ -42,18 +36,19 @@ flowchart LR
   L1 -->|1 SQS message / record| SQS
   SQS -->|SQSEvent| L2
   L2 -->|GET /investor/{id}| WM
+  L2 -->|query risk scores| PG
+  L2 -->|POST /risk-score/{id}| WM
   L2 -->|exists:false → DLQ| DLQ
-  L1 -.->|reads at init| SSM
-  L2 -.->|reads at init| SSM
-  GLUE -.->|reads at init| SSM
 
   S3_CUR -->|S3 ObjectCreated:*| L3
   L3 -->|TRUNCATE + batch INSERT| PG
+  S3_CUR -->|S3 ObjectCreated:*| L4
+  L4 -->|read investors + rates| PG
+  L4 -->|upsert daily_risk_scores| PG
 
-  L1 -.-> L1_LOG -.-> CW
-  L2 -.-> L2_LOG -.-> CW
-  GLUE -.-> GLUE_LOG -.-> CW
-  L3 -.-> L3_LOG -.-> CW
+  L1 -.->|reads at init| SSM
+  L2 -.->|reads at init| SSM
+  GLUE -.->|reads at init| SSM
 ```
 
 ## Deployment & Infrastructure
@@ -70,7 +65,7 @@ flowchart TD
     IS -->|aws ssm| SSM[SSM Parameters]
     IS -->|aws sqs| SQS[SQS Queue + DLQ]
     IS -->|aws s3| S3_BUCKETS[S3 Buckets]
-    IS -->|aws lambda| LAMBDAS[Lambda Functions\nfile-handler, sal-processor\ncurrency-refresh]
+    IS -->|aws lambda|     LAMBDAS[Lambda Functions\nfile-handler, sal-processor\ncurrency-refresh\nrisk-score-calculator]
     IS -->|aws s3api| S3_NOTIF[S3 Notifications\ninvestor-output + currency-rates-input]
     IS -->|aws lambda create-event-source-mapping| SQS_MAP[SQS → Lambda mapping]
   end
@@ -94,7 +89,8 @@ flowchart TD
     SBT["sbt assembly\nScala/Spark JAR"]
     MVN1["mvn package\nLambda 1 JAR"]
     MVN2["mvn package\nLambda 2 JAR"]
-    GO_BUILD["go build + UPX\ncurrency-refresh bootstrap"]
+    GO_BUILD1["go build + zip\ncurrency-refresh bootstrap"]
+    GO_BUILD2["go build + zip\nrisk-score-calculator bootstrap"]
     DOCKER["docker build\nglue-scala-minimal"]
   end
 ```
@@ -116,7 +112,11 @@ mindmap
       SqsProcessorLambda.java
       InvestorRecord.java
       pom.xml
-    Lambda_CurrencyRefresh
+      Lambda_CurrencyRefresh
+      main.go
+      go.mod
+      build.sh
+    Lambda_RiskScoreCalculator
       main.go
       go.mod
       build.sh
@@ -142,6 +142,7 @@ mindmap
     WireMock
       investor-check-*.json
       investor-check-segment.json
+      risk-score-save.json
     Tools
       generate-data/main.go
       generate-currency-file/main.go
@@ -194,10 +195,19 @@ sequenceDiagram
   Note over S3,DLQ: Currency refresh (parallel flow)
   participant CS3 as S3 (currency-rates-input)
   participant L3 as Lambda: currency-refresh
+  participant L4 as Lambda: risk-score-calculator
+  participant DRS as daily_risk_scores table
 
   GEN->>CS3: Upload rates file
   CS3-->>L3: Trigger S3Event
   L3->>CS3: Download file
   L3->>PG: TRUNCATE currency_rates
   L3->>PG: Batch INSERT N rates
+
+  Note over CS3,L4: Parallel trigger (same S3 event)
+  CS3-->>L4: Trigger S3Event
+  L4->>PG: Load currency rates + all investors
+  L4->>PG: Load investments & liabilities per investor
+  Note over L4: Compute composite score\nprofile×0.30 + investment×0.25 + liability×0.45
+  L4->>DRS: Upsert daily_risk_scores (1 row / investor)
 ```
