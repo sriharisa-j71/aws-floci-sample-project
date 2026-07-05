@@ -86,3 +86,16 @@ INSERT INTO public.currency_rates (base_currency, target_currency, rate, effecti
     ('USD', 'CHF', 0.890000, CURRENT_DATE),
     ('USD', 'EUR', 0.920000, CURRENT_DATE),
     ('USD', 'JPY', 158.500000, CURRENT_DATE);
+
+-- Daily risk scores (seed data for existing investors)
+INSERT INTO public.daily_risk_scores (customer_id, calculation_date, risk_profile, risk_score, investment_count, investment_diversity, total_investment_usd, total_liability_usd, debt_to_income_ratio, composite_score, risk_category)
+SELECT i.customer_id, CURRENT_DATE, d.profile, d.score, d.inv_count, d.inv_diversity, d.total_inv_usd, d.total_liab_usd, d.dti, d.composite, d.category
+FROM (SELECT customer_id FROM public.investors ORDER BY customer_id) i
+JOIN (VALUES
+    (1, 'Moderate',    50, 3, 3, 405500.00,  524200.00,  4.3683, 43.00, 'Moderate'),
+    (2, 'Conservative',25, 2, 2, 91200.00,   22000.00,   0.2588, 30.00, 'Low'),
+    (3, 'Aggressive',  75, 4, 4, 1798200.00, 1025000.00, 5.1250, 55.00, 'Moderate'),
+    (4, 'Moderate',    50, 1, 1, 38000.00,   31200.00,   0.4800, 48.00, 'Moderate'),
+    (5, 'Aggressive',  75, 4, 4, 1250000.00, 720000.00,  4.1143, 52.00, 'Moderate')
+) AS d(rn, profile, score, inv_count, inv_diversity, total_inv_usd, total_liab_usd, dti, composite, category)
+ON i.customer_id = d.rn;

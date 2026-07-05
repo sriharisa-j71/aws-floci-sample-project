@@ -1,8 +1,8 @@
 {
-  "priority": 10,
+  "priority": 5,
   "request": {
-    "method": "GET",
-    "urlPathPattern": "/investor/([0-9]+)"
+    "method": "POST",
+    "urlPathPattern": "/risk-score/([0-9]+)"
   },
   "response": {
     "status": 200,
@@ -10,10 +10,9 @@
       "Content-Type": "application/json"
     },
     "jsonBody": {
-      "exists": true,
+      "status": "saved",
       "customer_id": "{{request.pathSegments.[2]}}",
-      "full_name": "Generated Investor {{request.pathSegments.[2]}}",
-      "customer_segment": "Retail"
+      "timestamp": "{{now}}"
     },
     "transformers": ["response-template"]
   }

@@ -14,4 +14,10 @@ cd "$PROJECT_DIR/lambda-investor-sal-processor"
 mvn -q package -DskipTests
 echo "  JAR: target/investor-sal-processor-1.0.jar"
 
+echo "=== Building Lambda: risk-score-calculator ==="
+cd "$PROJECT_DIR/lambda-risk-score-calculator"
+bash build.sh
+echo "  binary: bootstrap"
+echo "  zip: risk-score-calculator.zip"
+
 echo "=== Lambda builds complete ==="

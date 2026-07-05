@@ -107,3 +107,24 @@ CREATE TABLE IF NOT EXISTS public.currency_rates (
     CONSTRAINT chk_cr_target CHECK (target_currency ~ '^[A-Z]{3}$'),
     CONSTRAINT uq_cr_pair UNIQUE (base_currency, target_currency, effective_date)
 );
+
+CREATE TABLE IF NOT EXISTS public.daily_risk_scores (
+    score_id            SERIAL PRIMARY KEY,
+    customer_id         INTEGER NOT NULL REFERENCES public.investors(customer_id),
+    calculation_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+    risk_profile        VARCHAR(20),
+    risk_score          INT,
+    investment_count    INT DEFAULT 0,
+    investment_diversity INT DEFAULT 0,
+    total_investment_usd NUMERIC(16,2) DEFAULT 0,
+    total_liability_usd  NUMERIC(16,2) DEFAULT 0,
+    debt_to_income_ratio NUMERIC(8,4) DEFAULT 0,
+    composite_score     NUMERIC(5,2) DEFAULT 0,
+    risk_category       VARCHAR(20) DEFAULT 'Moderate',
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_drs_risk_profile CHECK (risk_profile IN ('Conservative', 'Moderate', 'Aggressive')),
+    CONSTRAINT chk_drs_risk_score CHECK (risk_score IS NULL OR (risk_score >= 1 AND risk_score <= 100)),
+    CONSTRAINT chk_drs_category CHECK (risk_category IN ('Very Low', 'Low', 'Moderate', 'High', 'Critical')),
+    CONSTRAINT uq_daily_risk UNIQUE (customer_id, calculation_date)
+);

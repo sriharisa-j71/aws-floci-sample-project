@@ -15,12 +15,18 @@ import software.amazon.awssdk.services.ssm.model.GetParameterRequest;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResponse> {
@@ -33,10 +39,13 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResp
             "us-east-1");
     private static final String SSM_API_ENDPOINT_PATH = System.getenv()
             .getOrDefault("SSM_API_ENDPOINT_PATH", "/investor/api/endpoint");
+    private static final String DB_DSN = System.getenv().getOrDefault("DB_DSN",
+            "jdbc:postgresql://postgres:5432/postgres?user=admin&password=secret123");
 
     private final SsmClient ssm;
     private final ObjectMapper mapper;
     private final String apiEndpoint;
+    private Connection dbConn;
 
     public SqsProcessorLambda() {
         var creds = DefaultCredentialsProvider.create();
@@ -49,6 +58,14 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResp
         this.mapper = new ObjectMapper();
 
         this.apiEndpoint = readSsmParameter(SSM_API_ENDPOINT_PATH);
+
+        try {
+            this.dbConn = DriverManager.getConnection(DB_DSN);
+            log.info("Connected to PostgreSQL");
+        } catch (Exception e) {
+            log.warn("Failed to connect to PostgreSQL: {}", e.getMessage());
+            this.dbConn = null;
+        }
     }
 
     private String readSsmParameter(String paramPath) {
@@ -78,6 +95,13 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResp
                     log.warn("Investor {} does not exist, sending to DLQ", inv.customer_id());
                     failures.add(new SQSBatchResponse.BatchItemFailure(msg.getMessageId()));
                     continue;
+                }
+
+                RiskAssessment assessment = queryRiskScore(inv.customer_id());
+                if (assessment != null) {
+                    saveRiskAssessment(inv.customer_id(), assessment);
+                } else {
+                    log.info("No daily risk score found for investor {}", inv.customer_id());
                 }
             } catch (Exception e) {
                 log.error("Error processing message {}: {}", msg.getMessageId(), e.getMessage());
@@ -116,6 +140,85 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResp
         } catch (Exception e) {
             log.info("API call failed for investor {}: {}", customerId, e.getMessage());
             return false;
+        }
+    }
+
+    record RiskAssessment(
+            int customerId,
+            String riskProfile,
+            double compositeScore,
+            String riskCategory,
+            String calculationDate
+    ) {}
+
+    private RiskAssessment queryRiskScore(int customerId) {
+        if (dbConn == null) {
+            log.warn("No DB connection, skipping risk score query");
+            return null;
+        }
+        String sql = """
+                SELECT risk_profile, composite_score, risk_category,
+                       calculation_date::text
+                FROM daily_risk_scores
+                WHERE customer_id = $1
+                  AND calculation_date = CURRENT_DATE
+                ORDER BY calculation_date DESC
+                LIMIT 1
+                """.replace("$1", "?");
+        try (var stmt = dbConn.prepareStatement(sql)) {
+            stmt.setInt(1, customerId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return new RiskAssessment(
+                            customerId,
+                            rs.getString("risk_profile"),
+                            rs.getDouble("composite_score"),
+                            rs.getString("risk_category"),
+                            rs.getString("calculation_date")
+                    );
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Risk score query failed for customer {}: {}", customerId, e.getMessage());
+        }
+        return null;
+    }
+
+    private void saveRiskAssessment(int customerId, RiskAssessment assessment) {
+        if (apiEndpoint == null || apiEndpoint.isEmpty()) {
+            log.info("No API endpoint configured, skipping save");
+            return;
+        }
+        try {
+            URL url = URI.create(apiEndpoint + "/risk-score/" + customerId).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+
+            Map<String, Object> body = Map.of(
+                    "customer_id", assessment.customerId(),
+                    "risk_profile", assessment.riskProfile(),
+                    "composite_score", assessment.compositeScore(),
+                    "risk_category", assessment.riskCategory(),
+                    "calculation_date", assessment.calculationDate()
+            );
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(mapper.writeValueAsBytes(body));
+            }
+
+            int status = conn.getResponseCode();
+            String response;
+            try (var reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                response = reader.lines().collect(Collectors.joining());
+            }
+            log.info("Risk assessment saved for customer {}: status={}, response={}",
+                    customerId, status, response);
+        } catch (Exception e) {
+            log.warn("Failed to save risk assessment for customer {}: {}", customerId, e.getMessage());
         }
     }
 
