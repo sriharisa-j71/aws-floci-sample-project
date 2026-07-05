@@ -33,3 +33,8 @@ tools/*/generate-data.exe
 # OpenTofu state
 infra/.terraform*
 infra/terraform.tfstate*
+
+# Lambda build artifacts
+lambda-risk-score-calculator/bootstrap
+lambda-risk-score-calculator/risk-score-calculator.zip
+lambda-currency-refresh/bootstrap
