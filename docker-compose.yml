@@ -63,7 +63,7 @@ services:
       - ./tools/generate-data/generate-data:/opt/generate-data
     entrypoint: ["/opt/generate-data"]
     command:
-      - "-count=100"
+      - "-count=5000"
       - "-family-pct=0.01"
       - "-workers=4"
       - "-dsn=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable"

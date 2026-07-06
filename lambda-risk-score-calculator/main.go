@@ -6,9 +6,11 @@ import (
 	"log"
 	"math"
 	"os"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,13 +81,23 @@ func handleS3Event(ctx context.Context, event events.S3Event) error {
 	}
 	log.Printf("Loaded %d investors", len(investors))
 
+	investments, err := loadAllInvestmentSummaries(ctx)
+	if err != nil {
+		return fmt.Errorf("load investments: %w", err)
+	}
+	log.Printf("Loaded investment summaries for %d investors", len(investments))
+
+	liabilities, err := loadAllLiabilitySummaries(ctx)
+	if err != nil {
+		return fmt.Errorf("load liabilities: %w", err)
+	}
+	log.Printf("Loaded liability summaries for %d investors", len(liabilities))
+
 	var results []RiskScoreResult
 	for _, inv := range investors {
-		result, err := calculateInvestorRisk(ctx, inv, rates)
-		if err != nil {
-			log.Printf("Error scoring investor %d: %v", inv.CustomerID, err)
-			continue
-		}
+		result := calculateInvestorRisk(inv, rates,
+			investments[inv.CustomerID],
+			liabilities[inv.CustomerID])
 		results = append(results, result)
 	}
 
@@ -143,53 +155,61 @@ func loadAllInvestors(ctx context.Context) ([]InvestorData, error) {
 	return investors, nil
 }
 
-func loadInvestmentSummary(ctx context.Context, customerID int) (InvestmentSummary, error) {
-	var summary InvestmentSummary
+func loadAllInvestmentSummaries(ctx context.Context) (map[int]InvestmentSummary, error) {
 	rows, err := dbPool.Query(ctx, `
-		SELECT i.type, i.purchase_price_usd, i.current_value_usd
-		FROM investments i
-		WHERE i.customer_id = $1 AND i.is_active
-	`, customerID)
+		SELECT customer_id, type, purchase_price_usd, current_value_usd
+		FROM investments
+		WHERE is_active
+		ORDER BY customer_id
+	`)
 	if err != nil {
-		return summary, err
+		return nil, err
 	}
 	defer rows.Close()
 
+	summaries := make(map[int]InvestmentSummary)
 	for rows.Next() {
-		var typeName string
-		var purchaseTotal, currentValue float64
-		if err := rows.Scan(&typeName, &purchaseTotal, &currentValue); err != nil {
-			return summary, err
+		var cid int
+		var typ string
+		var purchase, current float64
+		if err := rows.Scan(&cid, &typ, &purchase, &current); err != nil {
+			return nil, err
 		}
-		summary.TotalPurchaseUSD += purchaseTotal
-		summary.TotalCurrentUSD += currentValue
-		summary.TypeNames = append(summary.TypeNames, typeName)
+		s := summaries[cid]
+		s.TotalPurchaseUSD += purchase
+		s.TotalCurrentUSD += current
+		s.TypeNames = append(s.TypeNames, typ)
+		summaries[cid] = s
 	}
-	return summary, nil
+	return summaries, nil
 }
 
-func loadLiabilitySummary(ctx context.Context, customerID int) (LiabilitySummary, error) {
-	var summary LiabilitySummary
+func loadAllLiabilitySummaries(ctx context.Context) (map[int]LiabilitySummary, error) {
 	rows, err := dbPool.Query(ctx, `
-		SELECT l.type, l.outstanding_amount_usd
-		FROM liabilities l
-		WHERE l.customer_id = $1 AND l.is_active
-	`, customerID)
+		SELECT customer_id, type, outstanding_amount_usd
+		FROM liabilities
+		WHERE is_active
+		ORDER BY customer_id
+	`)
 	if err != nil {
-		return summary, err
+		return nil, err
 	}
 	defer rows.Close()
 
+	summaries := make(map[int]LiabilitySummary)
 	for rows.Next() {
-		var typeName string
+		var cid int
+		var typ string
 		var outstanding float64
-		if err := rows.Scan(&typeName, &outstanding); err != nil {
-			return summary, err
+		if err := rows.Scan(&cid, &typ, &outstanding); err != nil {
+			return nil, err
 		}
-		summary.TotalOutstandingUSD += outstanding
-		summary.TypeNames = append(summary.TypeNames, typeName)
+		s := summaries[cid]
+		s.TotalOutstandingUSD += outstanding
+		s.TypeNames = append(s.TypeNames, typ)
+		summaries[cid] = s
 	}
-	return summary, nil
+	return summaries, nil
 }
 
 func calculateProfileScore(profile string, score *int) float64 {
@@ -277,23 +297,15 @@ func determineCategory(score float64) string {
 	}
 }
 
-func calculateInvestorRisk(ctx context.Context, inv InvestorData, rates map[string]float64) (RiskScoreResult, error) {
+func calculateInvestorRisk(inv InvestorData, rates map[string]float64,
+	investments InvestmentSummary, liabilities LiabilitySummary) RiskScoreResult {
+
 	var result RiskScoreResult
 	result.CustomerID = inv.CustomerID
 	result.RiskProfile = inv.RiskProfile
 	result.RiskScore = inv.RiskScore
 
-	investments, err := loadInvestmentSummary(ctx, inv.CustomerID)
-	if err != nil {
-		return result, fmt.Errorf("load investments: %w", err)
-	}
-
-	liabilities, err := loadLiabilitySummary(ctx, inv.CustomerID)
-	if err != nil {
-		return result, fmt.Errorf("load liabilities: %w", err)
-	}
-
-	result.InvestmentCount = len(investments.TypeNames)
+	result.InvestmentCount = len(uniqueStrings(investments.TypeNames))
 	result.InvestmentDiversity = len(uniqueStrings(investments.TypeNames))
 	result.TotalInvestmentUSD = investments.TotalCurrentUSD
 	result.TotalLiabilityUSD = liabilities.TotalOutstandingUSD
@@ -310,7 +322,7 @@ func calculateInvestorRisk(ctx context.Context, inv InvestorData, rates map[stri
 	result.CompositeScore = math.Round(composite*100) / 100
 	result.RiskCategory = determineCategory(result.CompositeScore)
 
-	return result, nil
+	return result
 }
 
 func uniqueStrings(s []string) []string {
@@ -336,33 +348,68 @@ func upsertRiskScores(ctx context.Context, results []RiskScoreResult) error {
 	}
 	defer tx.Rollback(ctx)
 
-	for _, r := range results {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO daily_risk_scores
-				(customer_id, calculation_date, risk_profile, risk_score,
-				 investment_count, investment_diversity,
-				 total_investment_usd, total_liability_usd,
-				 debt_to_income_ratio, composite_score, risk_category)
-			VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			ON CONFLICT (customer_id, calculation_date)
-			DO UPDATE SET
-				risk_profile        = EXCLUDED.risk_profile,
-				risk_score          = EXCLUDED.risk_score,
-				investment_count    = EXCLUDED.investment_count,
-				investment_diversity = EXCLUDED.investment_diversity,
-				total_investment_usd = EXCLUDED.total_investment_usd,
-				total_liability_usd  = EXCLUDED.total_liability_usd,
-				debt_to_income_ratio = EXCLUDED.debt_to_income_ratio,
-				composite_score     = EXCLUDED.composite_score,
-				risk_category       = EXCLUDED.risk_category,
-				created_at          = CURRENT_TIMESTAMP
-		`, r.CustomerID, r.RiskProfile, r.RiskScore,
+	_, err = tx.Exec(ctx, `
+		CREATE TEMP TABLE tmp_risk_scores (
+			customer_id INT, calculation_date DATE,
+			risk_profile TEXT, risk_score INT,
+			investment_count INT, investment_diversity INT,
+			total_investment_usd NUMERIC(16,2), total_liability_usd NUMERIC(16,2),
+			debt_to_income_ratio NUMERIC(8,4), composite_score NUMERIC(5,2),
+			risk_category TEXT
+		) ON COMMIT DROP
+	`)
+	if err != nil {
+		return fmt.Errorf("create temp table: %w", err)
+	}
+
+	today := time.Now().Truncate(24 * time.Hour)
+	rows := make([][]any, len(results))
+	for i, r := range results {
+		rows[i] = []any{
+			r.CustomerID, today,
+			r.RiskProfile, r.RiskScore,
 			r.InvestmentCount, r.InvestmentDiversity,
 			r.TotalInvestmentUSD, r.TotalLiabilityUSD,
-			r.DebtToIncomeRatio, r.CompositeScore, r.RiskCategory)
-		if err != nil {
-			return fmt.Errorf("upsert customer %d: %w", r.CustomerID, err)
+			r.DebtToIncomeRatio, r.CompositeScore, r.RiskCategory,
 		}
+	}
+
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{"tmp_risk_scores"},
+		[]string{"customer_id", "calculation_date", "risk_profile", "risk_score",
+			"investment_count", "investment_diversity",
+			"total_investment_usd", "total_liability_usd",
+			"debt_to_income_ratio", "composite_score", "risk_category"},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		return fmt.Errorf("copy into temp: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO daily_risk_scores
+			(customer_id, calculation_date, risk_profile, risk_score,
+			 investment_count, investment_diversity,
+			 total_investment_usd, total_liability_usd,
+			 debt_to_income_ratio, composite_score, risk_category)
+		SELECT customer_id, calculation_date, risk_profile, risk_score,
+		       investment_count, investment_diversity,
+		       total_investment_usd, total_liability_usd,
+		       debt_to_income_ratio, composite_score, risk_category
+		FROM tmp_risk_scores
+		ON CONFLICT (customer_id, calculation_date) DO UPDATE SET
+			risk_profile        = EXCLUDED.risk_profile,
+			risk_score          = EXCLUDED.risk_score,
+			investment_count    = EXCLUDED.investment_count,
+			investment_diversity = EXCLUDED.investment_diversity,
+			total_investment_usd = EXCLUDED.total_investment_usd,
+			total_liability_usd  = EXCLUDED.total_liability_usd,
+			debt_to_income_ratio = EXCLUDED.debt_to_income_ratio,
+			composite_score     = EXCLUDED.composite_score,
+			risk_category       = EXCLUDED.risk_category,
+			created_at          = CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return fmt.Errorf("upsert from temp: %w", err)
 	}
 
 	return tx.Commit(ctx)
