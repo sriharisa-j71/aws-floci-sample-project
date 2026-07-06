@@ -2,7 +2,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
 
-import com.example.EmpToS3Core
+import com.example.InvestorToS3Core
 import org.apache.spark.sql.SparkSession
 import org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
 
@@ -216,8 +216,8 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
   }
 
   "EmpToS3 ETL" should "read from FLOCI PostgreSQL via JDBC and write pipe-separated CSV to FLOCI S3" in {
-    EmpToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, jdbcQuery, s"s3a://$outputBucket/data/")
-    println("Written via EmpToS3Core.run()")
+    InvestorToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, jdbcQuery, s"s3a://$outputBucket/data/")
+    println("Written via InvestorToS3Core.run()")
   }
 
   "S3 output" should "be pipe-separated with header and contain the expected 5 records" in {

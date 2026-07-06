@@ -31,7 +31,7 @@ flowchart LR
   end
 
   subgraph MockAPI["Mock API"]
-    WM["WireMock :8080\nGET /investor/{id}\nGET /segment/{segment}\nPOST /risk-score/{id}"]
+    WM["WireMock :8080\nGET /investor/:id\nGET /segment/:segment\nPOST /risk-score/:id"]
   end
 
   PG -->|JDBC SELECT| GLUE
@@ -42,13 +42,13 @@ flowchart LR
   L3 -->|truncate + batch INSERT| PG
   L4 -->|read + compute + upsert| PG
 
-  GLUE -->|GET /segment/{segment}| WM
+  GLUE -->|GET /segment/:segment| WM
   GLUE -->|pipe-delimited CSV| S3_IN
   S3_IN -->|ObjectCreated:*.csv| L1
   L1 -->|parse CSV, 1 msg/row| SQS
   SQS -->|SQSEvent| L2
-  L2 -->|GET /investor/{id}| WM
-  L2 -->|POST /risk-score/{id}| WM
+  L2 -->|GET /investor/:id| WM
+  L2 -->|POST /risk-score/:id| WM
   L2 -->|query daily_risk_scores| PG
   L2 -->|exists:false| DLQ
 

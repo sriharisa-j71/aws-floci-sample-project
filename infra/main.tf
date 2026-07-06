@@ -97,16 +97,16 @@ resource "aws_s3_object" "app_jar" {
 
 resource "aws_s3_object" "lambda_file_handler_jar" {
   bucket = aws_s3_bucket.glue_artifacts.id
-  key    = "lambdas/employee-file-handler-1.0.jar"
-  source = "${path.module}/../lambda-employee-file-handler/target/employee-file-handler-1.0.jar"
-  etag   = filemd5("${path.module}/../lambda-employee-file-handler/target/employee-file-handler-1.0.jar")
+  key    = "lambdas/investor-file-handler-1.0.jar"
+  source = "${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar"
+  etag   = filemd5("${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar")
 }
 
 resource "aws_s3_object" "lambda_sal_processor_jar" {
   bucket = aws_s3_bucket.glue_artifacts.id
-  key    = "lambdas/employee-sal-processor-1.0.jar"
-  source = "${path.module}/../lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar"
-  etag   = filemd5("${path.module}/../lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar")
+  key    = "lambdas/investor-sal-processor-1.0.jar"
+  source = "${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar"
+  etag   = filemd5("${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar")
 }
 
 # aws_glue_job is only created for real AWS (mode = "aws").
@@ -474,8 +474,8 @@ resource "aws_lambda_function" "employee_file_handler" {
   role          = aws_iam_role.lambda_file_handler[0].arn
   runtime       = "java17"
   handler       = "com.example.S3ToSqsLambda::handleRequest"
-  filename      = "${path.module}/../lambda-employee-file-handler/target/employee-file-handler-1.0.jar"
-  source_code_hash = try(filebase64sha256("${path.module}/../lambda-employee-file-handler/target/employee-file-handler-1.0.jar"), "")
+  filename      = "${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar"
+  source_code_hash = try(filebase64sha256("${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar"), "")
   memory_size   = 512
   timeout       = 60
 
@@ -496,8 +496,8 @@ resource "aws_lambda_function" "employee_sal_processor" {
   role          = aws_iam_role.lambda_sal_processor[0].arn
   runtime       = "java17"
   handler       = "com.example.SqsProcessorLambda::handleRequest"
-  filename      = "${path.module}/../lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar"
-  source_code_hash = try(filebase64sha256("${path.module}/../lambda-employee-sal-processor/target/employee-sal-processor-1.0.jar"), "")
+  filename      = "${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar"
+  source_code_hash = try(filebase64sha256("${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar"), "")
   memory_size   = 512
   timeout       = 60
 

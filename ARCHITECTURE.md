@@ -26,18 +26,18 @@ flowchart LR
   end
 
   subgraph ExternalAPI["Mock API"]
-    WM["WireMock :8080\nGET /investor/{id}\nGET /segment/{segment}\nPOST /risk-score/{id}"]
+    WM["WireMock :8080\nGET /investor/:id\nGET /segment/:segment\nPOST /risk-score/:id"]
   end
 
   PG -->|JDBC query| GLUE
-  GLUE -->|GET /segment/{segment}| WM
+  GLUE -->|GET /segment/:segment| WM
   GLUE -->|pipe-delimited CSV| S3_OUT
   S3_OUT -->|S3 ObjectCreated:*.csv| L1
   L1 -->|1 SQS message / record| SQS
   SQS -->|SQSEvent| L2
-  L2 -->|GET /investor/{id}| WM
+  L2 -->|GET /investor/:id| WM
   L2 -->|query risk scores| PG
-  L2 -->|POST /risk-score/{id}| WM
+  L2 -->|POST /risk-score/:id| WM
   L2 -->|exists:false → DLQ| DLQ
 
   S3_CUR -->|S3 ObjectCreated:*| L3
@@ -169,7 +169,7 @@ sequenceDiagram
 
   GLUE->>PG: JDBC SELECT investors WHERE segment='Wealth'
   PG-->>GLUE: M investor rows
-  GLUE->>WM: GET /segment/{segment}
+  GLUE->>WM: GET /segment/:segment
   WM-->>GLUE: {"exists":true,"segment":"Wealth","status":"active"}
   GLUE->>S3: Write pipe-delimited CSV (coalesce 1)
 
@@ -182,7 +182,7 @@ sequenceDiagram
   SQS-->>L2: Trigger SQSEvent
 
   loop For each message
-    L2->>WM: GET /investor/{id}
+    L2->>WM: GET /investor/:id
     alt exists: true (seed IDs 1-5)
       WM-->>L2: {"exists":true,"customer_id":N}
       L2->>SQS: DeleteMessage
