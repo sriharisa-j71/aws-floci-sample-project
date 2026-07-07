@@ -17,9 +17,9 @@ import java.net.URI
 import java.sql.DriverManager
 import scala.collection.JavaConverters._
 
-class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
+class InvestorPipelineSimulation extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
 
-  private val endpoint = URI.create("http://localhost:4566")
+  private val flociEndpoint = URI.create("http://localhost:4566")
   private val region = Region.US_EAST_1
   private val creds = StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test"))
 
@@ -27,18 +27,19 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
   private var s3: S3Client = _
   private var rds: RdsClient = _
 
-  private val outputBucket = "emp-output"
-  private val dbInstanceId = "emp-db"
-  private val segment      = "Wealth"
+  private val outputBucket = "investor-output"
+  private val dbInstanceId = "investor-db"
 
   private val jdbcUser     = "admin"
   private val jdbcPassword = "secret123"
 
   private var jdbcUrl: String = _
 
+  private val segments = Seq("Wealth", "Premium", "Retail", "Corporate")
+
   override def beforeAll(): Unit = {
     spark = SparkSession.builder()
-      .appName("EmpToS3Simulation")
+      .appName("InvestorPipelineSimulation")
       .master("local[*]")
       .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
       .config("spark.hadoop.fs.s3a.endpoint", "http://localhost:4566")
@@ -52,16 +53,16 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
 
     s3 = S3Client.builder()
       .region(region).credentialsProvider(creds)
-      .endpointOverride(endpoint).forcePathStyle(true).build()
+      .endpointOverride(flociEndpoint).forcePathStyle(true).build()
 
     rds = RdsClient.builder()
       .region(region).credentialsProvider(creds)
-      .endpointOverride(endpoint).build()
+      .endpointOverride(flociEndpoint).build()
 
     createS3Bucket(outputBucket)
     createRdsInstance()
     jdbcUrl = waitForRdsAndGetJdbcUrl()
-    seedInvestorsTable()
+    seedFullSchema()
   }
 
   private def createS3Bucket(name: String): Unit = {
@@ -114,12 +115,10 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
       }
     }
     require(endpoint != null, s"RDS instance $dbInstanceId not available after 60s")
-    val url = s"jdbc:postgresql://${endpoint.address()}:${endpoint.port()}/postgres"
-    println(s"RDS JDBC URL: $url")
-    url
+    s"jdbc:postgresql://${endpoint.address()}:${endpoint.port()}/postgres"
   }
 
-  private def seedInvestorsTable(): Unit = {
+  private def seedFullSchema(): Unit = {
     Class.forName("org.postgresql.Driver")
     val conn = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPassword)
     try {
@@ -129,64 +128,70 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
           CREATE TABLE IF NOT EXISTS public.investors (
             customer_id       SERIAL PRIMARY KEY,
             full_name         VARCHAR(100) NOT NULL,
-            annual_income_usd NUMERIC(12,2),
-            customer_segment  VARCHAR(50),
-            domicile_currency VARCHAR(3),
-            join_date         DATE
+            annual_income_usd NUMERIC(12,2) NOT NULL,
+            customer_segment  VARCHAR(20) NOT NULL,
+            domicile_currency VARCHAR(3) NOT NULL,
+            join_date         DATE NOT NULL DEFAULT CURRENT_DATE,
+            bank_accounts     JSONB,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         """)
-        stmt.execute(s"""
+        stmt.execute("""
           INSERT INTO public.investors (full_name, annual_income_usd, customer_segment, domicile_currency, join_date) VALUES
-            ('Alice Johnson', 95000.00, '$segment', 'USD', '2022-03-15'),
-            ('Bob Smith',     72000.00, '$segment', 'USD', '2021-07-01'),
-            ('Carol Davis',   88000.00, '$segment', 'EUR', '2023-01-10'),
-            ('Dave Wilson',   105000.00,'$segment', 'GBP', '2020-11-20'),
-            ('Eve Martin',    65000.00, '$segment', 'USD', '2024-02-28')
+            ('Alice Johnson', 120000.00, 'Wealth',    'USD', '2020-03-15'),
+            ('Bob Smith',      85000.00, 'Premium',   'USD', '2021-07-01'),
+            ('Carol Davis',   200000.00, 'Wealth',    'CHF', '2019-01-10'),
+            ('Dave Wilson',    65000.00, 'Retail',    'USD', '2022-11-20'),
+            ('Eve Martin',    175000.00, 'Corporate', 'GBP', '2024-02-28')
         """)
+        println(s"investors table seeded with 5 investors across ${segments.mkString(", ")}")
       } finally {
         stmt.close()
       }
-      println(s"investors table seeded with 5 $segment investors")
     } finally {
       conn.close()
     }
   }
 
-  "ETL" should "read investors from PostgreSQL via JDBC and write pipe-separated CSV to S3" in {
-    InvestorToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, s"s3a://$outputBucket/data/", segment)
-  }
+  segments.foreach { seg =>
+    val expectedCount = seg match {
+      case "Wealth" => 2
+      case _        => 1
+    }
 
-  "S3 output" should "contain 5 pipe-separated records with header" in {
-    val df = spark.read
-      .option("delimiter", "|")
-      .option("header", "true")
-      .csv(s"s3a://$outputBucket/data/")
+    s"InvestorToS3 ETL for $seg" should s"write $expectedCount pipe-separated records to S3" in {
+      InvestorToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, s"s3a://$outputBucket/$seg/", seg)
+    }
 
-    val rows = df.collect()
-    rows.length shouldBe 5
+    s"S3 output for $seg" should s"contain $expectedCount records with correct columns" in {
+      val df = spark.read
+        .option("delimiter", "|")
+        .option("header", "true")
+        .csv(s"s3a://$outputBucket/$seg/")
 
-    val names = rows.map(_.getAs[String]("full_name")).toSet
-    names should contain("Alice Johnson")
-    names should contain("Bob Smith")
-    names should contain("Carol Davis")
-    names should contain("Dave Wilson")
-    names should contain("Eve Martin")
+      df.count() shouldBe expectedCount
 
-    val fields = df.head().schema.fieldNames.toSet
-    fields should contain("customer_id")
-    fields should contain("full_name")
-    fields should contain("annual_income_usd")
-    fields should contain("customer_segment")
-    fields should contain("domicile_currency")
-    fields should contain("join_date")
-    fields should contain("segment_status")
+      val fields = df.head().schema.fieldNames.toSet
+      fields should contain("customer_id")
+      fields should contain("full_name")
+      fields should contain("annual_income_usd")
+      fields should contain("customer_segment")
+      fields should contain("domicile_currency")
+      fields should contain("join_date")
+      fields should contain("segment_status")
+    }
   }
 
   override def afterAll(): Unit = {
     try {
-      val objects = s3.listObjectsV2(ListObjectsV2Request.builder().bucket(outputBucket).build()).contents()
-      objects.asScala.foreach { obj =>
-        s3.deleteObject(DeleteObjectRequest.builder().bucket(outputBucket).key(obj.key()).build())
+      segments.foreach { seg =>
+        try {
+          val objects = s3.listObjectsV2(ListObjectsV2Request.builder().bucket(outputBucket).prefix(s"$seg/").build()).contents()
+          objects.asScala.foreach { obj =>
+            s3.deleteObject(DeleteObjectRequest.builder().bucket(outputBucket).key(obj.key()).build())
+          }
+        } catch { case _: Exception => }
       }
       s3.deleteBucket(DeleteBucketRequest.builder().bucket(outputBucket).build())
     } catch { case _: Exception => }
