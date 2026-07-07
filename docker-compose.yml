@@ -126,6 +126,8 @@ services:
   glue-runner:
     container_name: glue-runner
     image: glue-scala-minimal:latest
+    build:
+      context: docker
     stdin_open: true
     tty: true
     depends_on:

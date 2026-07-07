@@ -9,6 +9,7 @@ exec spark-submit \
   --conf "spark.hadoop.fs.s3a.endpoint=$AWS_ENDPOINT_URL" \
   --conf spark.hadoop.fs.s3a.path.style.access=true \
   --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+  --conf spark.hadoop.fs.s3a.sdk.version=v2 \
   --conf 'spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider' \
   --conf spark.hadoop.fs.s3a.access.key=test \
   --conf spark.hadoop.fs.s3a.secret.key=test \

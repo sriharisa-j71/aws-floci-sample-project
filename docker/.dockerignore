@@ -1,0 +1,5 @@
+**
+!dependency-downloader/target/deps/jars/
+!dependency-downloader/target/deps/jars/*.jar
+!dependency-downloader/target/spark-dist/
+!dependency-downloader/target/spark-dist/**

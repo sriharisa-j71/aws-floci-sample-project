@@ -10,15 +10,12 @@ import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCrede
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.{CreateBucketRequest, DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request}
-import software.amazon.awssdk.services.glue.GlueClient
-import software.amazon.awssdk.services.glue.model.{Column, CreateDatabaseRequest, CreateTableRequest, DatabaseInput, DeleteDatabaseRequest, DeleteTableRequest, GetTableRequest, SerDeInfo, StorageDescriptor, TableInput}
 import software.amazon.awssdk.services.rds.RdsClient
 import software.amazon.awssdk.services.rds.model.{CreateDbInstanceRequest, DeleteDbInstanceRequest, DescribeDbInstancesRequest, Endpoint}
 
 import java.net.URI
 import java.sql.DriverManager
-import scala.jdk.CollectionConverters._
-import scala.util.Using
+import scala.collection.JavaConverters._
 
 class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
 
@@ -28,18 +25,14 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
 
   private var spark: SparkSession = _
   private var s3: S3Client = _
-  private var glue: GlueClient = _
   private var rds: RdsClient = _
 
-  private val inputBucket  = "emp-input"
   private val outputBucket = "emp-output"
-  private val databaseName = "analytics"
-  private val tableName    = "emp"
   private val dbInstanceId = "emp-db"
+  private val segment      = "Wealth"
 
   private val jdbcUser     = "admin"
   private val jdbcPassword = "secret123"
-  private val jdbcQuery    = "SELECT emp_id, emp_name, department, salary, hire_date FROM public.emp ORDER BY emp_id"
 
   private var jdbcUrl: String = _
 
@@ -61,25 +54,14 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
       .region(region).credentialsProvider(creds)
       .endpointOverride(endpoint).forcePathStyle(true).build()
 
-    glue = GlueClient.builder()
-      .region(region).credentialsProvider(creds)
-      .endpointOverride(endpoint).build()
-
     rds = RdsClient.builder()
       .region(region).credentialsProvider(creds)
       .endpointOverride(endpoint).build()
 
-    setupFlociResources()
-  }
-
-  private def setupFlociResources(): Unit = {
-    createS3Bucket(inputBucket)
     createS3Bucket(outputBucket)
     createRdsInstance()
     jdbcUrl = waitForRdsAndGetJdbcUrl()
-    seedEmpTable()
-    createGlueDatabase()
-    createGlueTable()
+    seedInvestorsTable()
   }
 
   private def createS3Bucket(name: String): Unit = {
@@ -137,177 +119,86 @@ class EmpToS3JobSimulation extends AnyFlatSpec with Matchers with BeforeAndAfter
     url
   }
 
-  private def seedEmpTable(): Unit = {
+  private def seedInvestorsTable(): Unit = {
     Class.forName("org.postgresql.Driver")
-    Using.resource(DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPassword)) { conn =>
-      Using.resource(conn.createStatement()) { stmt =>
+    val conn = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPassword)
+    try {
+      val stmt = conn.createStatement()
+      try {
         stmt.execute("""
-          CREATE TABLE IF NOT EXISTS public.emp (
-            emp_id     SERIAL PRIMARY KEY,
-            emp_name   VARCHAR(100) NOT NULL,
-            department VARCHAR(100),
-            salary     NUMERIC(10,2),
-            hire_date  DATE
+          CREATE TABLE IF NOT EXISTS public.investors (
+            customer_id       SERIAL PRIMARY KEY,
+            full_name         VARCHAR(100) NOT NULL,
+            annual_income_usd NUMERIC(12,2),
+            customer_segment  VARCHAR(50),
+            domicile_currency VARCHAR(3),
+            join_date         DATE
           )
         """)
-        stmt.execute("""
-          INSERT INTO public.emp (emp_name, department, salary, hire_date) VALUES
-            ('Alice Johnson', 'Engineering', 95000.00, '2022-03-15'),
-            ('Bob Smith',     'Marketing',   72000.00, '2021-07-01'),
-            ('Carol Davis',   'Finance',     88000.00, '2023-01-10'),
-            ('Dave Wilson',   'Engineering', 105000.00,'2020-11-20'),
-            ('Eve Martin',    'HR',          65000.00, '2024-02-28')
+        stmt.execute(s"""
+          INSERT INTO public.investors (full_name, annual_income_usd, customer_segment, domicile_currency, join_date) VALUES
+            ('Alice Johnson', 95000.00, '$segment', 'USD', '2022-03-15'),
+            ('Bob Smith',     72000.00, '$segment', 'USD', '2021-07-01'),
+            ('Carol Davis',   88000.00, '$segment', 'EUR', '2023-01-10'),
+            ('Dave Wilson',   105000.00,'$segment', 'GBP', '2020-11-20'),
+            ('Eve Martin',    65000.00, '$segment', 'USD', '2024-02-28')
         """)
+      } finally {
+        stmt.close()
       }
-      println("emp table created and seeded with 5 rows")
+      println(s"investors table seeded with 5 $segment investors")
+    } finally {
+      conn.close()
     }
   }
 
-  private def createGlueDatabase(): Unit = {
-    try {
-      glue.createDatabase(
-        CreateDatabaseRequest.builder()
-          .databaseInput(
-            DatabaseInput.builder().name(databaseName).build()
-          )
-          .build()
-      )
-      println(s"Glue database created: $databaseName")
-    } catch {
-      case e: Exception => println(s"Glue database may already exist: ${e.getMessage}")
-    }
+  "ETL" should "read investors from PostgreSQL via JDBC and write pipe-separated CSV to S3" in {
+    InvestorToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, s"s3a://$outputBucket/data/", segment)
   }
 
-  private def createGlueTable(): Unit = {
-    try {
-      glue.createTable(
-        CreateTableRequest.builder()
-          .databaseName(databaseName)
-          .tableInput(
-            TableInput.builder()
-              .name(tableName)
-              .storageDescriptor(
-                StorageDescriptor.builder()
-                  .location(s"s3://$inputBucket/data/")
-                  .inputFormat("org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat")
-                  .outputFormat("org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat")
-                  .serdeInfo(
-                    SerDeInfo.builder()
-                      .serializationLibrary("org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe")
-                      .build()
-                  )
-                  .columns(
-                    Column.builder().name("emp_id").`type`("int").build(),
-                    Column.builder().name("emp_name").`type`("string").build(),
-                    Column.builder().name("department").`type`("string").build(),
-                    Column.builder().name("salary").`type`("double").build(),
-                    Column.builder().name("hire_date").`type`("date").build()
-                  )
-                  .build()
-              )
-              .build()
-          )
-          .build()
-      )
-      println(s"Glue table created: $databaseName.$tableName")
-    } catch {
-      case e: Exception => println(s"Glue table may already exist: ${e.getMessage}")
-    }
-  }
-
-  "EmpToS3 ETL" should "read from FLOCI PostgreSQL via JDBC and write pipe-separated CSV to FLOCI S3" in {
-    InvestorToS3Core.run(spark, jdbcUrl, jdbcUser, jdbcPassword, jdbcQuery, s"s3a://$outputBucket/data/")
-    println("Written via InvestorToS3Core.run()")
-  }
-
-  "S3 output" should "be pipe-separated with header and contain the expected 5 records" in {
-    val outputDf = spark.read
+  "S3 output" should "contain 5 pipe-separated records with header" in {
+    val df = spark.read
       .option("delimiter", "|")
       .option("header", "true")
       .csv(s"s3a://$outputBucket/data/")
 
-    val rows = outputDf.collect()
+    val rows = df.collect()
     rows.length shouldBe 5
 
-    val names = rows.map(_.getAs[String]("emp_name")).toSet
+    val names = rows.map(_.getAs[String]("full_name")).toSet
     names should contain("Alice Johnson")
     names should contain("Bob Smith")
     names should contain("Carol Davis")
     names should contain("Dave Wilson")
     names should contain("Eve Martin")
 
-    val line = spark.read
-      .option("delimiter", "|")
-      .option("header", "true")
-      .csv(s"s3a://$outputBucket/data/")
-      .toDF()
-      .head()
-    line.schema.fieldNames should contain("emp_id")
-    line.schema.fieldNames should contain("emp_name")
-    line.schema.fieldNames should contain("department")
-    line.schema.fieldNames should contain("salary")
-    line.schema.fieldNames should contain("hire_date")
-
-    println("Verified 5 pipe-separated employee records with header in S3 output")
-  }
-
-  "Glue Data Catalog" should "contain the emp table registered via FLOCI" in {
-    val resp = glue.getTable(
-      GetTableRequest.builder()
-        .databaseName(databaseName)
-        .name(tableName)
-        .build()
-    )
-
-    val table = resp.table()
-    table.name() shouldBe tableName
-    table.storageDescriptor().location() should include(inputBucket)
-
-    val colNames = table.storageDescriptor().columns().asScala.map(_.name()).toSet
-    colNames should contain("emp_id")
-    colNames should contain("emp_name")
-    colNames should contain("department")
-    colNames should contain("salary")
-    colNames should contain("hire_date")
-
-    println(s"Glue table $databaseName.$tableName verified (columns: ${colNames.mkString(", ")})")
+    val fields = df.head().schema.fieldNames.toSet
+    fields should contain("customer_id")
+    fields should contain("full_name")
+    fields should contain("annual_income_usd")
+    fields should contain("customer_segment")
+    fields should contain("domicile_currency")
+    fields should contain("join_date")
+    fields should contain("segment_status")
   }
 
   override def afterAll(): Unit = {
     try {
-      val listReq = ListObjectsV2Request.builder().bucket(outputBucket).build()
-      val objects = s3.listObjectsV2(listReq).contents()
+      val objects = s3.listObjectsV2(ListObjectsV2Request.builder().bucket(outputBucket).build()).contents()
       objects.asScala.foreach { obj =>
-        s3.deleteObject(DeleteObjectRequest.builder()
-          .bucket(outputBucket).key(obj.key()).build())
+        s3.deleteObject(DeleteObjectRequest.builder().bucket(outputBucket).key(obj.key()).build())
       }
-
-      try {
-        rds.deleteDBInstance(
-          DeleteDbInstanceRequest.builder()
-            .dbInstanceIdentifier(dbInstanceId)
-            .skipFinalSnapshot(true)
-            .build()
-        )
-      } catch { case _: Exception => }
-
-      try {
-        glue.deleteTable(
-          DeleteTableRequest.builder()
-            .databaseName(databaseName).name(tableName).build()
-        )
-        glue.deleteDatabase(
-          DeleteDatabaseRequest.builder().name(databaseName).build()
-        )
-      } catch { case _: Exception => }
-
       s3.deleteBucket(DeleteBucketRequest.builder().bucket(outputBucket).build())
-      s3.deleteBucket(DeleteBucketRequest.builder().bucket(inputBucket).build())
+    } catch { case _: Exception => }
+
+    try {
+      rds.deleteDBInstance(
+        DeleteDbInstanceRequest.builder().dbInstanceIdentifier(dbInstanceId).skipFinalSnapshot(true).build()
+      )
     } catch { case _: Exception => }
 
     _root_.scala.Option(spark).foreach(_.stop())
     _root_.scala.Option(s3).foreach(_.close())
-    _root_.scala.Option(glue).foreach(_.close())
     _root_.scala.Option(rds).foreach(_.close())
   }
 }
