@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Docker & Docker Compose
-- Java JDK 17 (Corretto or OpenJDK)
+- Java JDK 11 (Corretto or OpenJDK)
 - Maven (for Java Lambda builds)
 - SBT (for Glue JAR assembly)
 - Go 1.21+ (for Go Lambda builds)

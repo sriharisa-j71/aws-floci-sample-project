@@ -63,7 +63,7 @@ services:
       - ./tools/generate-data/generate-data:/opt/generate-data
     entrypoint: ["/opt/generate-data"]
     command:
-      - "-count=5000"
+      - "-count=50"
       - "-family-pct=0.01"
       - "-workers=4"
       - "-dsn=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable"
@@ -106,9 +106,9 @@ services:
         aws s3 cp /tmp/investor-file-handler.jar s3://glue-artifacts/lambdas/investor-file-handler-1.0.jar
         aws s3 cp /tmp/investor-sal-processor.jar s3://glue-artifacts/lambdas/investor-sal-processor-1.0.jar
         echo '=== Creating Lambda: investor-file-handler ==='
-        aws lambda create-function --function-name investor-file-handler --runtime java17 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.S3ToSqsLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-file-handler-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-file-handler --s3-bucket glue-artifacts --s3-key lambdas/investor-file-handler-1.0.jar
+        aws lambda create-function --function-name investor-file-handler --runtime java11 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.S3ToSqsLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-file-handler-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-file-handler --s3-bucket glue-artifacts --s3-key lambdas/investor-file-handler-1.0.jar
         echo '=== Creating Lambda: investor-sal-processor ==='
-        aws lambda create-function --function-name investor-sal-processor --runtime java17 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.SqsProcessorLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-sal-processor-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-sal-processor --s3-bucket glue-artifacts --s3-key lambdas/investor-sal-processor-1.0.jar
+        aws lambda create-function --function-name investor-sal-processor --runtime java11 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.SqsProcessorLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-sal-processor-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-sal-processor --s3-bucket glue-artifacts --s3-key lambdas/investor-sal-processor-1.0.jar
         echo '=== Creating Lambda: currency-refresh ==='
         aws s3 cp /tmp/currency-refresh-bootstrap s3://glue-artifacts/lambdas/currency-refresh-bootstrap
         aws lambda create-function --function-name currency-refresh --runtime provided.al2023 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler bootstrap --code S3Bucket=glue-artifacts,S3Key=lambdas/currency-refresh-bootstrap --timeout 60 --memory-size 256 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1,DB_DSN=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable}" 2>/dev/null || aws lambda update-function-code --function-name currency-refresh --s3-bucket glue-artifacts --s3-key lambdas/currency-refresh-bootstrap
@@ -144,7 +144,7 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
     volumes:
-      - ./glue-job/target/out/jvm/scala-2.12.18/glue5-spark-job/glue5-spark-job-assembly-1.0.jar:/opt/job.jar
+      - ./glue-job/target/out/jvm/scala-2.12.18/glue4-spark-job/glue4-spark-job-assembly-1.0.jar:/opt/job.jar
       - ./scripts/glue-runner.sh:/opt/glue-runner.sh
     entrypoint: ["/bin/bash"]
     command: ["-c", "echo 'glue-runner ready. Submit jobs with: docker exec glue-runner bash /opt/glue-runner.sh' && sleep infinity"]

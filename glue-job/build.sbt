@@ -1,18 +1,18 @@
 import sbtassembly.AssemblyPlugin
 
 val scala2Version = "2.12.18"
-val sparkVersion = "3.5.4"
-val hadoopVersion = "3.3.5"
+val sparkVersion = "3.3.0"
+val hadoopVersion = "3.3.4"
 val awsSdkVersion = "2.21.0"
 
 lazy val root = (project in file("."))
   .enablePlugins(AssemblyPlugin)
   .settings(
-    name := "glue5-spark-job",
+    name := "glue4-spark-job",
     version := "1.0",
     scalaVersion := scala2Version,
 
-    javacOptions ++= Seq("-source", "17", "-target", "17"),
+    javacOptions ++= Seq("-source", "11", "-target", "11"),
 
     Test / classLoaderLayeringStrategy := ClassLoaderLayeringStrategy.Flat,
     Test / fork := true,

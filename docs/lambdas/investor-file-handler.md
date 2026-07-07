@@ -1,7 +1,7 @@
 # investor-file-handler Lambda
+**Language**: Java 11  
 
-**Language**: Java 17  
-**Runtime**: `java17`  
+**Runtime**: `java11`  
 **Handler**: `com.example.S3ToSqsLambda::handleRequest`  
 **Source**: `lambda-investor-file-handler/`
 

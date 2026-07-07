@@ -11,8 +11,8 @@ flowchart LR
 
   subgraph Compute["Compute Layer"]
     GLUE["AWS Glue Job\nScala/Spark\nInvestorToS3Core"]
-    L1["Lambda: investor-file-handler\nJava 17\nS3Event → SQS"]
-    L2["Lambda: investor-sal-processor\nJava 17\nSQS → WireMock + DB"]
+    L1["Lambda: investor-file-handler\nJava 11\nS3Event → SQS"]
+    L2["Lambda: investor-sal-processor\nJava 11\nSQS → WireMock + DB"]
     L3["Lambda: currency-refresh\nGo (provided.al2023)\nS3 → pgx batch"]
     L4["Lambda: risk-score-calculator\nGo (provided.al2023)\nS3 → DB scores"]
   end

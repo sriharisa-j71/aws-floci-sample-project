@@ -143,28 +143,41 @@ public class SqsProcessorLambda implements RequestHandler<SQSEvent, SQSBatchResp
         }
     }
 
-    record RiskAssessment(
-            int customerId,
-            String riskProfile,
-            double compositeScore,
-            String riskCategory,
-            String calculationDate
-    ) {}
+    static class RiskAssessment {
+        final int customerId;
+        final String riskProfile;
+        final double compositeScore;
+        final String riskCategory;
+        final String calculationDate;
+
+        RiskAssessment(int customerId, String riskProfile, double compositeScore,
+                       String riskCategory, String calculationDate) {
+            this.customerId = customerId;
+            this.riskProfile = riskProfile;
+            this.compositeScore = compositeScore;
+            this.riskCategory = riskCategory;
+            this.calculationDate = calculationDate;
+        }
+
+        int customerId() { return customerId; }
+        String riskProfile() { return riskProfile; }
+        double compositeScore() { return compositeScore; }
+        String riskCategory() { return riskCategory; }
+        String calculationDate() { return calculationDate; }
+    }
 
     private RiskAssessment queryRiskScore(int customerId) {
         if (dbConn == null) {
             log.warn("No DB connection, skipping risk score query");
             return null;
         }
-        String sql = """
-                SELECT risk_profile, composite_score, risk_category,
-                       calculation_date::text
-                FROM daily_risk_scores
-                WHERE customer_id = $1
-                  AND calculation_date = CURRENT_DATE
-                ORDER BY calculation_date DESC
-                LIMIT 1
-                """.replace("$1", "?");
+        String sql = "SELECT risk_profile, composite_score, risk_category, " +
+                "calculation_date::text " +
+                "FROM daily_risk_scores " +
+                "WHERE customer_id = ? " +
+                "AND calculation_date = CURRENT_DATE " +
+                "ORDER BY calculation_date DESC " +
+                "LIMIT 1";
         try (var stmt = dbConn.prepareStatement(sql)) {
             stmt.setInt(1, customerId);
             try (ResultSet rs = stmt.executeQuery()) {

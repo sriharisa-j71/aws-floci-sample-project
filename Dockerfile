@@ -1,6 +1,6 @@
-FROM amazoncorretto:17-alpine
+FROM docker.io/library/amazoncorretto:11-alpine
 
-ARG SPARK_VERSION=3.5.4
+ARG SPARK_VERSION=3.3.0
 ARG HADOOP_SHORT=3
 
 RUN apk add --no-cache bash wget ca-certificates
@@ -10,7 +10,7 @@ RUN wget -qO- "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spar
     ln -s "/opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_SHORT}" /opt/spark
 
 ARG HADOOP_AWS_VERSION=3.3.4
-ARG AWS_SDK_BUNDLE_VERSION=1.12.262
+ARG AWS_SDK_BUNDLE_VERSION=1.12.367
 RUN wget -q "https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_AWS_VERSION}/hadoop-aws-${HADOOP_AWS_VERSION}.jar" \
     -O "/opt/spark/jars/hadoop-aws-${HADOOP_AWS_VERSION}.jar" && \
     wget -q "https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/${AWS_SDK_BUNDLE_VERSION}/aws-java-sdk-bundle-${AWS_SDK_BUNDLE_VERSION}.jar" \

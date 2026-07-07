@@ -78,7 +78,7 @@ Also writes `_SUCCESS` marker file.
 - **One segment per run** — supported: `Wealth`, `Premium`, `Retail`, `Corporate`.
 - **API called once per segment**, not per row — department-level granularity.
 - **coalesce(1)** — single output file; remove for distributed multi-part output.
-- **SBT assembly** produces fat JAR (`glue5-spark-job-assembly-1.0.jar`, ~40 MB).
+- **SBT assembly** produces fat JAR (`glue4-spark-job-assembly-1.0.jar`, ~40 MB).
 - **Logging** via SLF4J + Logback (Logstash JSON format when configured).
 - Runs in `glue-runner` Docker container (`glue-scala-minimal:latest`).
 - The `SEGMENT` env var controls which segment is processed (default: `Wealth`).

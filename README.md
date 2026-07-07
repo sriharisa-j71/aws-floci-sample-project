@@ -1,6 +1,6 @@
 # FLOCI Glue Job — Investment Bank Customer/Investor Simulation
 
-End-to-end investment bank customer simulation pipeline using AWS Glue (Spark), Lambda (Java 17 + Go), SQS, SSM, S3, and WireMock API mock — runnable locally via [Floci](https://floci.dev/) or deployed to real AWS via OpenTofu.
+End-to-end investment bank customer simulation pipeline using AWS Glue 4.0 (Spark), Lambda (Java 11 + Go), SQS, SSM, S3, and WireMock API mock — runnable locally via [Floci](https://floci.dev/) or deployed to real AWS via OpenTofu.
 
 **Business Context**: Banks need to simulate large-scale investor populations with realistic financial profiles — dual-currency holdings (USD + domicile), temporal risk/investment/liability histories, multi-member family banking relationships (~30% share addresses/surnames) — to test risk aggregation, portfolio analytics, and regulatory reporting pipelines. This project generates synthetic investors, processes them through a Spark ETL enriched by microservice API calls, and validates outputs via async Lambda/SQS chains.
 
@@ -16,8 +16,8 @@ flowchart LR
   subgraph Compute["Compute & Processing"]
     GEN["Go: generate-data\nsynthetic investor gen"]
     GLUE["Glue Job (Spark)\nInvestorToS3Core\nJDBC read + API enrich"]
-    L1["Lambda: investor-file-handler\nJava 17\nS3Event → SQS"]
-    L2["Lambda: investor-sal-processor\nJava 17\nSQS → WireMock + DB"]
+    L1["Lambda: investor-file-handler\nJava 11\nS3Event → SQS"]
+    L2["Lambda: investor-sal-processor\nJava 11\nSQS → WireMock + DB"]
     L3["Lambda: currency-refresh\nGo (provided.al2023)\nS3 → pgx batch upsert"]
     L4["Lambda: risk-score-calculator\nGo (provided.al2023)\nS3 → score all investors"]
   end
@@ -86,8 +86,8 @@ See detailed documentation for each Lambda:
 
 | Lambda | Runtime | Trigger | Logic | Docs |
 |---|---|---|---|---|
-| `investor-file-handler` | Java 17 | S3 `ObjectCreated:*` on `investor-output/` (*.csv) | Reads CSV, publishes 1 SQS msg per row | [docs](docs/lambdas/investor-file-handler.md) |
-| `investor-sal-processor` | Java 17 | SQS from `investor-processing` | Checks WireMock existence, queries risk scores from DB, POSTs assessment | [docs](docs/lambdas/investor-sal-processor.md) |
+| `investor-file-handler` | Java 11 | S3 `ObjectCreated:*` on `investor-output/` (*.csv) | Reads CSV, publishes 1 SQS msg per row | [docs](docs/lambdas/investor-file-handler.md) |
+| `investor-sal-processor` | Java 11 | SQS from `investor-processing` | Checks WireMock existence, queries risk scores from DB, POSTs assessment | [docs](docs/lambdas/investor-sal-processor.md) |
 | `currency-refresh` | Go (provided.al2023) | S3 `ObjectCreated:*` on `currency-rates-input/` | Downloads file, truncates + batch INSERTs into `currency_rates` | [docs](docs/lambdas/currency-refresh.md) |
 | `risk-score-calculator` | Go (provided.al2023) | S3 `ObjectCreated:*` on `currency-rates-input/` | Loads all investors + rates, computes composite score (profile×30% + investment×25% + liability×45%), upserts to `daily_risk_scores` | [docs](docs/lambdas/risk-score-calculator.md) |
 
@@ -178,7 +178,7 @@ See [docs](docs/lambdas/risk-score-calculator.md).
 
 ### Prerequisites
 - Docker & Docker Compose
-- Java JDK 17 (Corretto or OpenJDK)
+- Java JDK 11 (Corretto or OpenJDK)
 - SBT (for Glue JAR assembly)
 - Go 1.21+ and UPX (for Go binaries)
 - OpenTofu (optional, for AWS infra management)

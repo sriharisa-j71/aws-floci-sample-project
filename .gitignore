@@ -29,6 +29,7 @@ SESSION.md
 # Go build artifacts
 tools/*/generate-data
 tools/*/generate-data.exe
+lambda-risk-score-calculator/lambda-risk-score-calculator
 
 # OpenTofu state
 infra/.terraform*

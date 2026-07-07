@@ -90,9 +90,9 @@ resource "aws_s3_object" "glue_script" {
 
 resource "aws_s3_object" "app_jar" {
   bucket = aws_s3_bucket.glue_artifacts.id
-  key    = "jars/glue5-spark-job-assembly-1.0.jar"
-  source = "${local.deploy_dir}/jars/glue5-spark-job-assembly-1.0.jar"
-  etag   = filemd5("${local.deploy_dir}/jars/glue5-spark-job-assembly-1.0.jar")
+  key    = "jars/glue4-spark-job-assembly-1.0.jar"
+  source = "${local.deploy_dir}/jars/glue4-spark-job-assembly-1.0.jar"
+  etag   = filemd5("${local.deploy_dir}/jars/glue4-spark-job-assembly-1.0.jar")
 }
 
 resource "aws_s3_object" "lambda_file_handler_jar" {
@@ -116,7 +116,7 @@ resource "aws_glue_job" "emp_to_s3" {
 
   name     = "${var.project_name}-emp-to-s3"
   role_arn = aws_iam_role.glue_service_role.arn
-  glue_version = "5.0"
+  glue_version = "4.0"
 
   command {
     script_location = "s3://${aws_s3_bucket.glue_artifacts.id}/scripts/EmpToS3Job.scala"
@@ -133,7 +133,7 @@ resource "aws_glue_job" "emp_to_s3" {
     "--jdbc_query"          = "SELECT emp_id, emp_name, department, salary, hire_date FROM public.emp ORDER BY emp_id"
     "--output_path"         = "s3://${aws_s3_bucket.glue_output.id}/output/"
     "--job-language"        = "scala"
-    "--extra-jars"          = "s3://${aws_s3_bucket.glue_artifacts.id}/jars/glue5-spark-job-assembly-1.0.jar"
+    "--extra-jars"          = "s3://${aws_s3_bucket.glue_artifacts.id}/jars/glue4-spark-job-assembly-1.0.jar"
 
     "--continuous-log-logGroup"          = "/aws-glue/${var.project_name}-emp-to-s3"
     "--continuous-log-logStreamPrefix"   = "driver"
@@ -472,7 +472,7 @@ resource "aws_lambda_function" "employee_file_handler" {
 
   function_name = "${var.project_name}-employee-file-handler"
   role          = aws_iam_role.lambda_file_handler[0].arn
-  runtime       = "java17"
+  runtime       = "java11"
   handler       = "com.example.S3ToSqsLambda::handleRequest"
   filename      = "${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar"
   source_code_hash = try(filebase64sha256("${path.module}/../lambda-investor-file-handler/target/investor-file-handler-1.0.jar"), "")
@@ -494,7 +494,7 @@ resource "aws_lambda_function" "employee_sal_processor" {
 
   function_name = "${var.project_name}-employee-sal-processor"
   role          = aws_iam_role.lambda_sal_processor[0].arn
-  runtime       = "java17"
+  runtime       = "java11"
   handler       = "com.example.SqsProcessorLambda::handleRequest"
   filename      = "${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar"
   source_code_hash = try(filebase64sha256("${path.module}/../lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar"), "")

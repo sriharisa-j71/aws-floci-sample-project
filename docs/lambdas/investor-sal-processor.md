@@ -1,7 +1,7 @@
 # investor-sal-processor Lambda
+**Language**: Java 11  
 
-**Language**: Java 17  
-**Runtime**: `java17`  
+**Runtime**: `java11`  
 **Handler**: `com.example.SqsProcessorLambda::handleRequest`  
 **Source**: `lambda-investor-sal-processor/`
 
