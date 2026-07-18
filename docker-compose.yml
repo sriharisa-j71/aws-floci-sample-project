@@ -1,7 +1,7 @@
 services:
   wiremock:
     container_name: wiremock
-    image: wiremock/wiremock:latest
+    image: wiremock/wiremock:3.13.2
     ports:
       - "8080:8080"
     volumes:
@@ -16,7 +16,7 @@ services:
 
   floci:
     container_name: floci
-    image: floci/floci:latest
+    image: floci/floci:1.5.33
     ports:
       - "4566:4566"
     volumes:
@@ -68,61 +68,6 @@ services:
       - "-workers=4"
       - "-dsn=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable"
 
-  infra-setup:
-    container_name: infra-setup
-    image: amazon/aws-cli:latest
-    depends_on:
-      floci:
-        condition: service_healthy
-    environment:
-      AWS_ENDPOINT_URL: http://floci:4566
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-    volumes:
-      - ./lambda-investor-file-handler/target/investor-file-handler-1.0.jar:/tmp/investor-file-handler.jar
-      - ./lambda-investor-sal-processor/target/investor-sal-processor-1.0.jar:/tmp/investor-sal-processor.jar
-      - ./lambda-currency-refresh/bootstrap:/tmp/currency-refresh-bootstrap
-      - ./lambda-risk-score-calculator/risk-score-calculator.zip:/tmp/risk-score-calculator.zip
-    entrypoint:
-      - /bin/sh
-      - -c
-    command:
-      - |
-        echo '=== Creating SSM params ==='
-        aws ssm put-parameter --name /investor/api/endpoint --value http://wiremock:8080 --type String --overwrite
-        echo '=== Creating SQS queues ==='
-        DLQ_URL=$$(aws sqs create-queue --queue-name investor-processing-dlq --query QueueUrl --output text)
-        DLQ_ARN=$$(aws sqs get-queue-attributes --queue-url "$$DLQ_URL" --attribute-names QueueArn --query Attributes.QueueArn --output text)
-        MAIN_URL=$$(aws sqs create-queue --queue-name investor-processing --query QueueUrl --output text)
-        python3 -c "import json,sys; policy=json.dumps({'deadLetterTargetArn':sys.argv[1],'maxReceiveCount':3}); print(json.dumps({'RedrivePolicy':policy}))" "$$DLQ_ARN" > /tmp/redrive.json
-        aws sqs set-queue-attributes --queue-url "$$MAIN_URL" --attributes file:///tmp/redrive.json
-        aws ssm put-parameter --name /investor/sqs/queue-url --value "$$MAIN_URL" --type String --overwrite
-        echo '=== Creating S3 buckets ==='
-        aws s3 mb s3://glue-artifacts --region us-east-1 2>/dev/null || true
-        aws s3 mb s3://investor-output --region us-east-1 2>/dev/null || true
-        aws s3 mb s3://currency-rates-input --region us-east-1 2>/dev/null || true
-        echo '=== Uploading Lambda JARs to S3 ==='
-        aws s3 cp /tmp/investor-file-handler.jar s3://glue-artifacts/lambdas/investor-file-handler-1.0.jar
-        aws s3 cp /tmp/investor-sal-processor.jar s3://glue-artifacts/lambdas/investor-sal-processor-1.0.jar
-        echo '=== Creating Lambda: investor-file-handler ==='
-        aws lambda create-function --function-name investor-file-handler --runtime java11 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.S3ToSqsLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-file-handler-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-file-handler --s3-bucket glue-artifacts --s3-key lambdas/investor-file-handler-1.0.jar
-        echo '=== Creating Lambda: investor-sal-processor ==='
-        aws lambda create-function --function-name investor-sal-processor --runtime java11 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler com.example.SqsProcessorLambda::handleRequest --code S3Bucket=glue-artifacts,S3Key=lambdas/investor-sal-processor-1.0.jar --timeout 60 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1}" 2>/dev/null || aws lambda update-function-code --function-name investor-sal-processor --s3-bucket glue-artifacts --s3-key lambdas/investor-sal-processor-1.0.jar
-        echo '=== Creating Lambda: currency-refresh ==='
-        aws s3 cp /tmp/currency-refresh-bootstrap s3://glue-artifacts/lambdas/currency-refresh-bootstrap
-        aws lambda create-function --function-name currency-refresh --runtime provided.al2023 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler bootstrap --code S3Bucket=glue-artifacts,S3Key=lambdas/currency-refresh-bootstrap --timeout 60 --memory-size 256 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1,DB_DSN=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable}" 2>/dev/null || aws lambda update-function-code --function-name currency-refresh --s3-bucket glue-artifacts --s3-key lambdas/currency-refresh-bootstrap
-        echo '=== Creating Lambda: risk-score-calculator ==='
-        aws s3 cp /tmp/risk-score-calculator.zip s3://glue-artifacts/lambdas/risk-score-calculator.zip
-        aws lambda create-function --function-name risk-score-calculator --runtime provided.al2023 --role arn:aws:iam::000000000000:role/lambda-exec-role --handler bootstrap --code S3Bucket=glue-artifacts,S3Key=lambdas/risk-score-calculator.zip --timeout 120 --memory-size 512 --environment Variables="{AWS_ENDPOINT_URL=http://floci:4566,AWS_DEFAULT_REGION=us-east-1,DB_DSN=postgres://admin:secret123@postgres:5432/postgres?sslmode=disable}" 2>/dev/null || aws lambda update-function-code --function-name risk-score-calculator --s3-bucket glue-artifacts --s3-key lambdas/risk-score-calculator.zip
-        echo '=== Setting up S3 notification (investor-output → investor-file-handler) ==='
-        aws s3api put-bucket-notification-configuration --bucket investor-output --notification-configuration '{"LambdaFunctionConfigurations":[{"LambdaFunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:investor-file-handler","Events":["s3:ObjectCreated:*"],"Filter":{"Key":{"FilterRules":[{"Name":"suffix","Value":".csv"}]}}}]}'
-        echo '=== Setting up S3 notification (currency-rates-input → currency-refresh + risk-score-calculator) ==='
-        aws s3api put-bucket-notification-configuration --bucket currency-rates-input --notification-configuration '{"LambdaFunctionConfigurations":[{"LambdaFunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:currency-refresh","Events":["s3:ObjectCreated:*"]},{"LambdaFunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:risk-score-calculator","Events":["s3:ObjectCreated:*"]}]}'
-        echo '=== Setting up SQS event mapping (investor-processing → investor-sal-processor) ==='
-        aws lambda create-event-source-mapping --function-name investor-sal-processor --event-source-arn arn:aws:sqs:us-east-1:000000000000:investor-processing --batch-size 10 --function-response-types ReportBatchItemFailures 2>/dev/null || true
-        echo '=== Infra setup complete ==='
-
   glue-runner:
     container_name: glue-runner
     image: glue-scala-minimal:latest
@@ -133,8 +78,6 @@ services:
     depends_on:
       wiremock:
         condition: service_healthy
-      infra-setup:
-        condition: service_completed_successfully
       floci:
         condition: service_healthy
       postgres:
