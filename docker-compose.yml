@@ -146,7 +146,7 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
     volumes:
-      - ./glue-job/target/out/jvm/scala-2.12.18/glue4-spark-job/glue4-spark-job-assembly-1.0.jar:/opt/job.jar
+      - ./glue-job/target/scala-2.12/glue4-spark-job-assembly-1.0.jar:/opt/job.jar
       - ./scripts/glue-runner.sh:/opt/glue-runner.sh
     entrypoint: ["/bin/bash"]
     command: ["-c", "echo 'glue-runner ready. Submit jobs with: docker exec glue-runner bash /opt/glue-runner.sh' && sleep infinity"]

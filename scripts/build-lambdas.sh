@@ -20,4 +20,10 @@ bash build.sh
 echo "  binary: bootstrap"
 echo "  zip: risk-score-calculator.zip"
 
+echo "=== Building Lambda: sql-query-runner ==="
+cd "$PROJECT_DIR/lambda-sql-query-runner"
+bash build.sh
+echo "  binary: bootstrap"
+echo "  zip: sql-query-runner.zip"
+
 echo "=== Lambda builds complete ==="

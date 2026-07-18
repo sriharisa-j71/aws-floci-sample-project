@@ -16,10 +16,12 @@ provider "aws" {
   s3_use_path_style           = true
 
   endpoints {
-    sts  = "http://localhost:4566"
-    iam  = "http://localhost:4566"
-    s3   = "http://localhost:4566"
-    ec2  = "http://localhost:4566"
-    glue = "http://localhost:4566"
+    sts    = "http://localhost:4566"
+    iam    = "http://localhost:4566"
+    s3     = "http://localhost:4566"
+    ec2    = "http://localhost:4566"
+    glue   = "http://localhost:4566"
+    lambda = "http://localhost:4566"
+    logs   = "http://localhost:4566"
   }
 }

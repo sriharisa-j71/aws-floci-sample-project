@@ -1,0 +1,61 @@
+[[queries]]
+name = "investors_by_segment"
+sql = "SELECT * FROM investors WHERE customer_segment = $1"
+params = ["segment"]
+dynamic_where = false
+limit = true
+s3_bucket = "query-results"
+s3_prefix = "query-results/investors"
+
+[[queries]]
+name = "risk_report"
+sql = """
+SELECT i.customer_id, i.full_name, i.customer_segment,
+       drs.composite_score, drs.risk_category, drs.calculation_date
+FROM investors i
+JOIN daily_risk_scores drs ON i.customer_id = drs.customer_id
+WHERE 1=1
+"""
+dynamic_where = true
+filters = ["customer_id", "risk_category", "customer_segment"]
+filter_map = {customer_id = "i.customer_id", customer_segment = "i.customer_segment", risk_category = "drs.risk_category"}
+limit = true
+s3_bucket = "query-results"
+s3_prefix = "query-results/risk"
+
+[[queries]]
+name = "all_investors"
+sql = "SELECT * FROM investors WHERE 1=1"
+dynamic_where = true
+filters = ["customer_id", "customer_segment", "domicile_currency"]
+limit = true
+s3_bucket = "query-results"
+s3_prefix = "query-results/investors"
+
+[[queries]]
+name = "investments_full"
+sql = """
+SELECT inv.customer_id, inv.type, inv.ticker, inv.description, inv.quantity,
+       inv.current_value_usd, inv.effective_start_date
+FROM investments inv
+WHERE 1=1
+"""
+dynamic_where = true
+filters = ["customer_id", "type", "ticker"]
+limit = true
+s3_bucket = "query-results"
+s3_prefix = "query-results/investments"
+
+[[queries]]
+name = "liabilities_full"
+sql = """
+SELECT li.customer_id, li.type, li.creditor, li.outstanding_amount_usd,
+       li.interest_rate, li.monthly_payment_usd, li.effective_start_date
+FROM liabilities li
+WHERE 1=1
+"""
+dynamic_where = true
+filters = ["customer_id", "type", "creditor"]
+limit = true
+s3_bucket = "query-results"
+s3_prefix = "query-results/liabilities"

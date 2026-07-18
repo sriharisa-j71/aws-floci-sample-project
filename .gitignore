@@ -35,8 +35,12 @@ lambda-risk-score-calculator/lambda-risk-score-calculator
 # OpenTofu state
 infra/.terraform*
 infra/terraform.tfstate*
+infra/tfplan
 
 # Lambda build artifacts
 lambda-risk-score-calculator/bootstrap
 lambda-risk-score-calculator/risk-score-calculator.zip
 lambda-currency-refresh/bootstrap
+lambda-sql-query-runner/bootstrap
+lambda-sql-query-runner/lambda-sql-query-runner
+lambda-sql-query-runner/sql-query-runner.zip

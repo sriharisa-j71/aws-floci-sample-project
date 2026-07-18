@@ -82,17 +82,19 @@ locals {
 }
 
 resource "aws_s3_object" "glue_script" {
+  count  = local.is_aws ? 1 : 0
   bucket = aws_s3_bucket.glue_artifacts.id
   key    = "scripts/EmpToS3Job.scala"
   source = "${local.deploy_dir}/scripts/EmpToS3Job.scala"
-  etag   = filemd5("${local.deploy_dir}/scripts/EmpToS3Job.scala")
+  etag   = try(filemd5("${local.deploy_dir}/scripts/EmpToS3Job.scala"), "")
 }
 
 resource "aws_s3_object" "app_jar" {
+  count  = local.is_aws ? 1 : 0
   bucket = aws_s3_bucket.glue_artifacts.id
   key    = "jars/glue4-spark-job-assembly-1.0.jar"
   source = "${local.deploy_dir}/jars/glue4-spark-job-assembly-1.0.jar"
-  etag   = filemd5("${local.deploy_dir}/jars/glue4-spark-job-assembly-1.0.jar")
+  etag   = try(filemd5("${local.deploy_dir}/jars/glue4-spark-job-assembly-1.0.jar"), "")
 }
 
 resource "aws_s3_object" "lambda_file_handler_jar" {
@@ -530,6 +532,90 @@ resource "aws_lambda_event_source_mapping" "sal_processor_trigger" {
   event_source_arn = aws_sqs_queue.emp_processing[0].arn
   function_name    = aws_lambda_function.employee_sal_processor[0].arn
   batch_size       = 10
+}
+
+# ---------------------------------------------------------------------------
+# Lambda: sql-query-runner (Floci + AWS)
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "query_results" {
+  bucket = var.query_results_bucket
+  tags   = { Name = var.query_results_bucket }
+}
+
+resource "aws_s3_object" "lambda_sql_query_runner_zip" {
+  bucket = aws_s3_bucket.glue_artifacts.id
+  key    = "lambdas/sql-query-runner.zip"
+  source = "${path.module}/../lambda-sql-query-runner/sql-query-runner.zip"
+  etag   = filemd5("${path.module}/../lambda-sql-query-runner/sql-query-runner.zip")
+}
+
+data "aws_iam_policy_document" "lambda_sql_query_runner_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "lambda_sql_query_runner_policy" {
+  statement {
+    actions   = ["s3:PutObject", "s3:GetObject"]
+    resources = ["${aws_s3_bucket.query_results.arn}/*"]
+  }
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.query_results.arn]
+  }
+  statement {
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:*:*"]
+  }
+}
+
+resource "aws_iam_role" "lambda_sql_query_runner" {
+  name               = "${var.project_name}-sql-query-runner-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_sql_query_runner_assume.json
+}
+
+resource "aws_iam_role_policy" "lambda_sql_query_runner" {
+  name   = "${var.project_name}-sql-query-runner-policy"
+  role   = aws_iam_role.lambda_sql_query_runner.id
+  policy = data.aws_iam_policy_document.lambda_sql_query_runner_policy.json
+}
+
+resource "aws_lambda_function" "sql_query_runner" {
+  function_name    = "sql-query-runner"
+  role             = aws_iam_role.lambda_sql_query_runner.arn
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  s3_bucket        = aws_s3_bucket.glue_artifacts.id
+  s3_key           = aws_s3_object.lambda_sql_query_runner_zip.key
+  source_code_hash = filebase64sha256("${path.module}/../lambda-sql-query-runner/sql-query-runner.zip")
+  memory_size      = 256
+  timeout          = 30
+
+  environment {
+    variables = {
+      AWS_ENDPOINT_URL  = var.lambda_internal_endpoint_url
+      AWS_DEFAULT_REGION = var.aws_region
+      DB_DSN            = var.lambda_db_dsn
+      S3_BUCKET         = var.query_results_bucket
+      S3_PREFIX         = "query-results"
+    }
+  }
+
+  tags = { Name = "sql-query-runner" }
+}
+
+resource "aws_lambda_function_url" "sql_query_runner" {
+  function_name      = aws_lambda_function.sql_query_runner.function_name
+  authorization_type = "NONE"
 }
 
 # ---------------------------------------------------------------------------

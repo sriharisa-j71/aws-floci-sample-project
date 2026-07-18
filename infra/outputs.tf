@@ -41,3 +41,13 @@ output "spark_submit_command" {
   EOT
   sensitive   = true
 }
+
+output "sql_query_runner_function_url" {
+  description = "Function URL for the sql-query-runner Lambda"
+  value       = aws_lambda_function_url.sql_query_runner.function_url
+}
+
+output "sql_query_runner_function_name" {
+  description = "Name of the sql-query-runner Lambda"
+  value       = aws_lambda_function.sql_query_runner.function_name
+}

@@ -20,6 +20,7 @@ flowchart LR
     L2["Lambda: investor-sal-processor\nJava 11\nSQS → WireMock + DB"]
     L3["Lambda: currency-refresh\nGo (provided.al2023)\nS3 → pgx batch upsert"]
     L4["Lambda: risk-score-calculator\nGo (provided.al2023)\nS3 → score all investors"]
+    L5["Lambda: sql-query-runner\nGo (provided.al2023)\nFunction URL → SQL → S3"]
   end
 
   subgraph Storage["Storage & Messaging"]
@@ -28,6 +29,7 @@ flowchart LR
     SQS[("SQS: investor-processing\n1 msg / investor row")]
     DLQ[("SQS: DLQ\nfailed investors")]
     SSM[("SSM Parameter Store\n/investor/api/endpoint\n/investor/sqs/queue-url")]
+    S3_QR[("S3: query-results\npipe-delimited text")]
   end
 
   subgraph MockAPI["Mock API"]
@@ -55,6 +57,9 @@ flowchart LR
   L1 -.->|read at init| SSM
   L2 -.->|read at init| SSM
   GLUE -.->|read at init| SSM
+
+  L5 -->|query PG| PG
+  L5 -->|upload results| S3_QR
 ```
 
 **Flow**:
@@ -90,6 +95,7 @@ See detailed documentation for each Lambda:
 | `investor-sal-processor` | Java 11 | SQS from `investor-processing` | Checks WireMock existence, queries risk scores from DB, POSTs assessment | [docs](docs/lambdas/investor-sal-processor.md) |
 | `currency-refresh` | Go (provided.al2023) | S3 `ObjectCreated:*` on `currency-rates-input/` | Downloads file, truncates + batch INSERTs into `currency_rates` | [docs](docs/lambdas/currency-refresh.md) |
 | `risk-score-calculator` | Go (provided.al2023) | S3 `ObjectCreated:*` on `currency-rates-input/` | Loads all investors + rates, computes composite score (profile×30% + investment×25% + liability×45%), upserts to `daily_risk_scores` | [docs](docs/lambdas/risk-score-calculator.md) |
+| `sql-query-runner` | Go (provided.al2023) | Function URL (HTTP) | Executes parameterized SQL queries, uploads pipe-delimited results to S3 | [README](lambda-sql-query-runner/README.md) |
 
 ### Spark Glue Job (`glue-job/`)
 
@@ -174,6 +180,19 @@ Composite formula: `profileScore × 0.30 + investmentRisk × 0.25 + liabilityRis
 
 See [docs](docs/lambdas/risk-score-calculator.md).
 
+### `lambda-sql-query-runner/` — SQL Query Runner Go Lambda
+
+Function URL-triggered Lambda that executes parameterized SQL queries against PostgreSQL and uploads pipe-delimited results to S3. Managed by OpenTofu (not docker-compose `infra-setup`).
+
+- **Trigger**: HTTP POST/GET to Function URL (`auth-type = NONE`)
+- **Query resolution**: code registry (built-in) or `queries.toml` (auto mode)
+- **Request**: `X-Query-Name` header (required), optional JSON body with `params`, `where`, `where_list`, `limit`, `offset`
+- **Output**: pipe-delimited text → `s3://<bucket>/<prefix>/<date>/<query>_<ts>.txt`
+- **Env vars**: `DB_DSN`, `S3_BUCKET`, `S3_PREFIX`, `AWS_ENDPOINT_URL`, `QUERIES_TOML_PATH`
+- Build: `bash lambda-sql-query-runner/build.sh` → `sql-query-runner.zip` (bootstrap + queries.toml)
+
+See [README](lambda-sql-query-runner/README.md) for full API docs, query definitions, and usage examples.
+
 ## How to Use
 
 ### Prerequisites
@@ -198,13 +217,16 @@ bash lambda-currency-refresh/build.sh
 # 4. Go Lambda — risk-score-calculator (zip deployment)
 bash lambda-risk-score-calculator/build.sh
 
-# 5. Go data generator (UPX-compressed)
+# 5. Go Lambda — sql-query-runner (zip deployment)
+bash lambda-sql-query-runner/build.sh
+
+# 6. Go data generator (UPX-compressed)
 bash tools/generate-data/build.sh
 
-# 6. Go currency file generator (UPX-compressed)
+# 7. Go currency file generator (UPX-compressed)
 bash tools/generate-currency-file/build.sh
 
-# 7. Glue runner Docker image
+# 8. Glue runner Docker image
 docker build -t glue-scala-minimal:latest .
 ```
 
@@ -245,6 +267,7 @@ See [TESTING.md](TESTING.md) for detailed test procedures.
 3. `glue-runner` writes segment-filtered CSV to S3
 4. Floci triggers `investor-file-handler` Lambda → SQS
 5. Floci triggers `investor-sal-processor` Lambda → checks existence via WireMock, queries risk scores, POSTs assessment back to WireMock
+6. Query results via `sql-query-runner` Function URL → SQL → S3
 
 ## Scripts
 
@@ -320,6 +343,7 @@ docker logs floci -f 2>&1 | grep -E '(START|END|REPORT)'
 docker logs floci 2>&1 | grep "investor-file-handler"
 docker logs floci 2>&1 | grep "investor-sal-processor"
 docker logs floci 2>&1 | grep "currency-refresh"
+docker logs floci 2>&1 | grep "sql-query-runner"
 
 # S3 notifications
 docker logs floci 2>&1 | grep "notification"
@@ -407,7 +431,7 @@ tofu plan -var-file=aws.tfvars -out=tfplan
 tofu apply tfplan
 ```
 
-OpenTofu creates: IAM roles/policies, S3 buckets, Glue Job, Lambda functions, S3→Lambda notifications, SQS queue + event mapping, SSM parameters, CloudWatch log groups.
+OpenTofu creates: IAM roles/policies, S3 buckets, Glue Job, Lambda functions (including `sql-query-runner`), S3→Lambda notifications, SQS queue + event mapping, SSM parameters, CloudWatch log groups, Function URLs.
 
 ---
 
@@ -421,6 +445,7 @@ OpenTofu creates: IAM roles/policies, S3 buckets, Glue Job, Lambda functions, S3
 | [docs/lambdas/investor-sal-processor.md](docs/lambdas/investor-sal-processor.md) | SAL processor Lambda: business context, input, processing, output |
 | [docs/lambdas/currency-refresh.md](docs/lambdas/currency-refresh.md) | Currency refresh Lambda: business context, input, processing, output |
 | [docs/lambdas/risk-score-calculator.md](docs/lambdas/risk-score-calculator.md) | Risk score calculator Lambda: business context, input, processing, output |
+| [lambda-sql-query-runner/README.md](lambda-sql-query-runner/README.md) | SQL query runner Lambda: API docs, query definitions, S3 output format |
 | [docs/glue-job.md](docs/glue-job.md) | Glue Spark job: business context, input, processing, output |
 | [LOGGING-ANALYSIS.md](LOGGING-ANALYSIS.md) | Using `search-logs.sh` to query Lambda logs |
 
@@ -431,4 +456,5 @@ OpenTofu creates: IAM roles/policies, S3 buckets, Glue Job, Lambda functions, S3
 - **Segment API is called once per segment**, not per row — department-level granularity as designed.
 - **Java Lambdas** run via Floci's Docker executor using `public.ecr.aws/lambda/java:17`.
 - **Go Lambdas** (`currency-refresh`, `risk-score-calculator`) use `provided.al2023` with a static `bootstrap` binary. The risk-score-calculator is deployed as a zip; currency-refresh as a raw binary on S3.
+- **`sql-query-runner`** is deployed via OpenTofu (not docker-compose `infra-setup`). Function URL from `tofu output -raw sql_query_runner_function_url`. Queries defined in code registry + `queries.toml`.
 - **WireMock mapping for `/investor/{id}`** returns `exists: true` for all IDs (catch-all with response templating), not just seed investors.

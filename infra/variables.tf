@@ -93,3 +93,22 @@ variable "log_export_retention_days" {
   type        = number
   default     = 90
 }
+
+variable "lambda_internal_endpoint_url" {
+  description = "AWS endpoint URL visible inside Docker network (for Lambda env vars)"
+  type        = string
+  default     = "http://floci:4566"
+}
+
+variable "lambda_db_dsn" {
+  description = "PostgreSQL DSN for Lambda functions"
+  type        = string
+  default     = "postgres://admin:secret123@postgres:5432/postgres?sslmode=disable"
+  sensitive   = true
+}
+
+variable "query_results_bucket" {
+  description = "S3 bucket for SQL query runner results"
+  type        = string
+  default     = "query-results"
+}
