@@ -1,0 +1,53 @@
+{
+  "suiteName": "lifecycle-suite",
+  "schemaVersion": 1,
+  "beforeAll": [
+    {
+      "hookType": "beforeAll",
+      "actions": [
+        {
+          "actionType": "s3:putObject",
+          "params": {
+            "bucket": "config-bucket",
+            "key": "setup.json",
+            "content": "{}"
+          }
+        }
+      ],
+      "order": 0
+    }
+  ],
+  "afterAll": [
+    {
+      "hookType": "afterAll",
+      "actions": [
+        {
+          "actionType": "s3:deleteObject",
+          "params": {
+            "bucket": "config-bucket",
+            "key": "setup.json"
+          }
+        }
+      ],
+      "order": 0
+    }
+  ],
+  "cases": [
+    {
+      "caseName": "lifecycle-case",
+      "steps": [
+        {
+          "stepName": "step1",
+          "action": {
+            "actionType": "s3:putObject",
+            "params": {
+              "bucket": "test-bucket",
+              "key": "test-key",
+              "content": "test content"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

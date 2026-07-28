@@ -1,0 +1,18 @@
+[
+  {"name": "com.example.regression.model.Action"},
+  {"name": "com.example.regression.model.TestCase"},
+  {"name": "com.example.regression.model.TestCaseResult"},
+  {"name": "com.example.regression.model.TestRun"},
+  {"name": "com.example.regression.model.TestStep"},
+  {"name": "com.example.regression.model.TestStepResult"},
+  {"name": "com.example.regression.model.TestSuite"},
+  {"name": "com.example.regression.model.Verification"},
+  {"name": "com.example.regression.model.VerificationResult"},
+  {"name": "com.example.regression.model.LifecycleHook"},
+  {"name": "com.example.regression.model.SuiteResult"},
+  {"name": "com.example.regression.report.ReportModel"},
+  {"name": "com.example.regression.report.ReportModel$CaseEntry"},
+  {"name": "com.example.regression.report.ReportModel$StepEntry"},
+  {"name": "com.example.regression.report.ReportModel$VerificationEntry"},
+  {"name": "com.fasterxml.jackson.datatype.jsr310.JavaTimeModule"}
+]

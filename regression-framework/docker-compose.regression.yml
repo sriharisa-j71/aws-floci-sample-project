@@ -1,0 +1,31 @@
+version: "3.8"
+services:
+  regression-db:
+    image: postgres:16-alpine
+    container_name: regression-db
+    environment:
+      POSTGRES_DB: regression
+      POSTGRES_USER: regression
+      POSTGRES_PASSWORD: regression
+    ports:
+      - "5433:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    shm_size: 64MB
+    command: >
+      postgres
+      -c max_connections=10
+      -c shared_buffers=32MB
+      -c effective_cache_size=96MB
+      -c maintenance_work_mem=16MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=512kB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=32MB
+      -c max_wal_size=128MB
+      -c log_min_duration_statement=5000

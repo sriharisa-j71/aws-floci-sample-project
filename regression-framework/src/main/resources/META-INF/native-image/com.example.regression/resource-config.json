@@ -1,0 +1,9 @@
+{
+  "resources": {
+    "includes": [
+      {"pattern": "application.yml"},
+      {"pattern": "db/migration/.*"},
+      {"pattern": "jte/.*"}
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  datasource:
+    url: jdbc:postgresql://localhost:5433/regression
+    username: regression
+    password: regression
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+logging:
+  level:
+    org.springframework.jdbc: TRACE
+
+regression:
+  aws:
+    endpoint: http://localhost:4566
+    region: us-east-1
+    path-style-access: true
+  suite-dirs:
+    - test-suites
+  data-dirs:
+    - test-data
+  retention-days: 90

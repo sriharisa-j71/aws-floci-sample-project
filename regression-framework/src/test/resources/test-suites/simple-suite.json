@@ -1,0 +1,22 @@
+{
+  "suiteName": "simple-suite",
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "caseName": "simple-case",
+      "steps": [
+        {
+          "stepName": "step1",
+          "action": {
+            "actionType": "s3:putObject",
+            "params": {
+              "bucket": "test-bucket",
+              "key": "test-key",
+              "content": "test content"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
